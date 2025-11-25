@@ -60,4 +60,4 @@ Then open the local URL printed by Streamlit.
 - Clustering quality depends on metadata richness (subject terms, description, title).
 
 ## License
-MIT
+
