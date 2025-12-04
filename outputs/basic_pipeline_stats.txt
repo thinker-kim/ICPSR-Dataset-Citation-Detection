@@ -1,0 +1,17 @@
+========== BASIC PIPELINE STATS ==========
+
+[1] OpenAlex search results
+  - Total articles collected: 11932
+
+[2] Corpus with ICPSR detection fields
+  - Rows: 11932
+  - Articles with ICPSR signal: 939
+
+[3] ICPSR-related articles
+  - Total ICPSR-related articles: 939
+  - Research articles: 125
+  - ICPSR data/docs: 814
+  - Other/missing: 0
+  - With study number (any type): 887
+  - Research articles w/ dataset link: 84
+  - Distinct datasets reused: 533
