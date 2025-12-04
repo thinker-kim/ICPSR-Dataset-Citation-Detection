@@ -85,7 +85,6 @@ Designed for bibliometrics researchers, data scientists, and science-of-science 
                  • Streamlit (app/streamlit_app.py)
                  • Article Explorer / Dataset Rankings / Journal Lens
 
----
 
 ### 1.1 — Article Retrieval & Metadata Enrichment
 
