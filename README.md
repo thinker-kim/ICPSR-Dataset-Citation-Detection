@@ -17,7 +17,7 @@ Designed for bibliometrics researchers, data scientists, and science-of-science 
 
 ---
 
-## 1️⃣ System Architecture & Data Flow
+## 1. System Architecture & Data Flow
 
 ### 1.1 — Article Retrieval & Metadata Enrichment
 
@@ -105,7 +105,7 @@ Grouped analysis at dataset level (`icpsr_study_number`):
 
 ---
 
-## 2️⃣ Interactive Dashboard
+## 2. Interactive Dashboard
 
 Located in: `app/streamlit_app.py`
 
@@ -182,16 +182,6 @@ Top journals by ICPSR engagement.
 
 ---
 
-## 3️⃣ Artifacts & Data Files
-
-| File | Purpose | GitHub | Notes |
-|------|---------|--------|-------|
-| `outputs/articles.csv` | Raw OpenAlex retrieval | ❌ | File size limit |
-| `outputs/articles_with_detection.csv` | Articles + full-text + detection | ❌ | Generated on-demand |
-| `outputs/icpsr_articles_detected.csv` | Clean article-level results | ✅ | Curated output |
-| `outputs/icpsr_datasets_detected.csv` | Dataset aggregation | ✅ | Curated output |
-| `icpsr_openalex_map.csv` | ICPSR–OpenAlex DOI mapping | ✅ | Reference dataset |
-
 **Auto-generation:**
 
 ```bash
@@ -204,7 +194,7 @@ python scripts/dataset_summary_only.py
 
 ---
 
-## 4️⃣ Getting Started
+## 3. Getting Started
 
 ### Prerequisites
 
@@ -233,10 +223,3 @@ streamlit run app/streamlit_app.py
 
 Dashboard accessible at `http://localhost:8501`
 
----
-
-## 📝 License & Citation
-
-This project is open source. Please cite appropriately in your work.
-
-For questions or contributions, please open an issue or pull request.
