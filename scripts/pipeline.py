@@ -1,31 +1,57 @@
 # pipeline.py
+"""
+ICPSR Dataset Citation Detector – Unified Pipeline
+
+Run with:
+    python pipeline.py
+
+This single script performs:
+  1) (If needed) OpenAlex metadata download
+  2) (If needed) fulltext retrieval (with abstract fallback)
+  3) ICPSR text-based + reference-based detection
+  4) Work classification:
+         - research_article_using_icpsr
+         - icpsr_data_doc
+         - not_icpsr_related
+  5) Output files:
+         outputs/articles_with_detection.csv
+         outputs/icpsr_articles_detected.csv
+         outputs/icpsr_datasets_detected.csv
+         outputs/clusters.csv (optional)
+  6) Caching:
+         If articles_with_detection.csv exists and contains fulltext,
+         metadata download and fulltext fetching are skipped.
+"""
 
 import os
 import json
 from pathlib import Path
 import pandas as pd
 import re
+
 from config_local import OUTPUT_DIR, ARTICLES_CSV_PATH
 from search_articles import main as fetch_articles_main
 from fetch_fulltext import fetch_fulltext_for_row
 from detect_mentions import detect_icpsr_in_document
 
+
 # -------------------------------------------------------------------
-# ICPSR–OpenAlex mapping
+# Paths & ICPSR–OpenAlex mapping
 # -------------------------------------------------------------------
-# This mapping file is built separately (e.g., by build_icpsr_openalex_map.py)
-# and contains at least:
-#   - icpsr_doi
-#   - icpsr_study_number
-#   - openalex_work_id
-ICPSR_MAP_PATH = Path("icpsr_openalex_map.csv")
+
+ROOT = Path(__file__).resolve().parent
+
+OUTPUT_DIR = Path(OUTPUT_DIR)
+ARTICLES_CSV_PATH = Path(ARTICLES_CSV_PATH)
+
+# Mapping file is fixed to outputs/icpsr_openalex_map.csv
+ICPSR_MAP_PATH = OUTPUT_DIR / "icpsr_openalex_map.csv"
 
 try:
     df_map = pd.read_csv(ICPSR_MAP_PATH)
-    # Set of OpenAlex work IDs that correspond to ICPSR datasets
-    ICPSR_WORK_ID_SET = set(df_map["openalex_work_id"].dropna().tolist())
 
-    # Convenience dicts for metadata lookup by OpenAlex work ID
+    ICPSR_WORK_ID_SET = set(df_map["openalex_work_id"].dropna().astype(str).tolist())
+
     ICPSR_WORK_ID_TO_DOI = {
         str(row["openalex_work_id"]): row["icpsr_doi"]
         for _, row in df_map.dropna(subset=["openalex_work_id", "icpsr_doi"]).iterrows()
@@ -35,18 +61,13 @@ try:
         for _, row in df_map.dropna(subset=["openalex_work_id", "icpsr_study_number"]).iterrows()
     }
 
-    print(f"[INIT] Loaded ICPSR–OpenAlex map with {len(ICPSR_WORK_ID_SET)} dataset work IDs")
+    print(f"[INIT] Loaded ICPSR–OpenAlex map with {len(ICPSR_WORK_ID_SET)} entries.")
 except FileNotFoundError:
-    # If the mapping is missing, reference-based detection will be disabled
-    print(f"[WARN] Mapping file not found: {ICPSR_MAP_PATH} — reference-based detection disabled.")
+    print(f"[WARN] Mapping file not found at {ICPSR_MAP_PATH}. Reference-based detection disabled.")
     df_map = pd.DataFrame()
     ICPSR_WORK_ID_SET = set()
     ICPSR_WORK_ID_TO_DOI = {}
     ICPSR_WORK_ID_TO_STUDY = {}
-
-# Convert to Path objects in case OUTPUT_DIR / ARTICLES_CSV_PATH are plain strings
-OUTPUT_DIR = Path(OUTPUT_DIR)
-ARTICLES_CSV_PATH = Path(ARTICLES_CSV_PATH)
 
 
 def ensure_outputs_dir():
@@ -55,20 +76,37 @@ def ensure_outputs_dir():
     print(f"[INIT] OUTPUT_DIR ready: {OUTPUT_DIR}")
 
 
+# -------------------------------------------------------------------
+# Fulltext building with caching
+# -------------------------------------------------------------------
 def build_articles_with_fulltext() -> pd.DataFrame:
     """
-    Step 1: Run OpenAlex metadata downloader
+    Step 1: Download OpenAlex metadata (if needed)
     Step 2: Load metadata CSV
-    Step 3: Fetch fulltexts; if unavailable, fall back to OpenAlex abstract
+    Step 3: Fetch fulltexts; if unavailable, fallback to abstracts
 
-    The resulting DataFrame will contain a 'fulltext' column that is used
-    as the primary input to the ICPSR mention detector.
+    Caching:
+      If outputs/articles_with_detection.csv exists and contains
+      non-empty 'fulltext', Steps 1–3 are skipped.
     """
-    print("[STEP 1] Running search_articles.main() ...")
-    fetch_articles_main()
-    print("[STEP 1] Completed metadata download.")
+    cached_path = OUTPUT_DIR / "articles_with_detection.csv"
 
-    print(f"[STEP 2] Loading {ARTICLES_CSV_PATH} ...")
+    if cached_path.exists():
+        df_cached = pd.read_csv(cached_path)
+        if "fulltext" in df_cached.columns and df_cached["fulltext"].notna().any():
+            print(f"[CACHE] Using cached articles_with_detection.csv (fulltext available).")
+            return df_cached
+        else:
+            print(f"[CACHE] Cached file found but fulltext missing. Rebuilding fulltexts.")
+
+    if ARTICLES_CSV_PATH.exists():
+        print(f"[STEP 1] Metadata CSV already exists. Skipping download.")
+    else:
+        print(f"[STEP 1] Downloading metadata via search_articles.main() ...")
+        fetch_articles_main()
+        print("[STEP 1] Metadata download completed.")
+
+    print(f"[STEP 2] Loading metadata from {ARTICLES_CSV_PATH} ...")
     df = pd.read_csv(ARTICLES_CSV_PATH)
 
     print("[STEP 3] Fetching fulltexts ...")
@@ -76,92 +114,76 @@ def build_articles_with_fulltext() -> pd.DataFrame:
 
     has_abstract_col = "abstract_text" in df.columns
     if has_abstract_col:
-        print("[INFO] abstract_text column found — will use it as fallback.")
+        print("[INFO] abstract_text column detected; will be used as fallback.")
 
     for i, row in df.iterrows():
         if (i + 1) % 20 == 0:
-            print(f"  - Processing row {i+1}/{len(df)}")
+            print(f"  Processing row {i+1}/{len(df)}")
 
-        # Try getting the full text from URLs
         try:
             txt = fetch_fulltext_for_row(row)
         except Exception as e:
-            print(f"[ERROR] Fulltext retrieval failed at row {i}: {e}")
+            print(f"[ERROR] Fulltext retrieval failed for row {i}: {e}")
             txt = None
 
-        # If fulltext is missing, use decoded OpenAlex abstract as fallback
         if (not txt) and has_abstract_col:
             abs_txt = row.get("abstract_text")
             if isinstance(abs_txt, str) and abs_txt.strip():
                 txt = abs_txt
 
-        # Ensure we do not store nulls
         if not txt:
             txt = ""
 
         texts.append(txt)
 
     df["fulltext"] = texts
-    print("[STEP 3] Completed fulltext processing.")
+    print("[STEP 3] Fulltext processing completed.")
     return df
 
 
+# -------------------------------------------------------------------
+# Reference list parsing helper
+# -------------------------------------------------------------------
+
 def _parse_referenced_works_cell(value):
     """
-    Helper to safely parse the 'referenced_works' column.
+    Safely parse the 'referenced_works' column.
 
-    The column is expected to contain either:
-      - a JSON-encoded list of OpenAlex work IDs, or
-      - a Python list of IDs (if loaded from a non-CSV source).
-
-    Returns:
-        List[str]: list of OpenAlex work IDs (may be empty).
+    Expected formats:
+      - JSON-encoded list of OpenAlex IDs
+      - Python list
+      - Semicolon-separated string
     """
     if isinstance(value, list):
         return [str(v) for v in value]
 
     if isinstance(value, str):
-        # Try JSON first
         try:
             parsed = json.loads(value)
             if isinstance(parsed, list):
                 return [str(v) for v in parsed]
         except json.JSONDecodeError:
-            # Fallback: allow simple delimiter-based storage (e.g., ';'-separated)
             if ";" in value:
-                return [s.strip() for s in value.split(";") if s.strip()]
+                return [v.strip() for v in value.split(";") if v.strip()]
+
     return []
 
-# ------------------------------------------------------------
-# ICPSR work-type classification helpers
-# ------------------------------------------------------------
+
+# -------------------------------------------------------------------
+# ICPSR work classification helpers
+# -------------------------------------------------------------------
 
 ICPSR_VENUE_KEYWORDS = ["icpsr", "openicpsr"]
 
 
 def is_icpsr_data_document(doi: str | None, host_venue: str | None) -> bool:
-    """
-    Determine whether a work is an ICPSR/openICPSR data document,
-    such as dataset description pages, project documentation,
-    or ICPSR-generated reports.
-    """
+    """Determine whether the work is an ICPSR/openICPSR-generated data document."""
+    doi_str = doi.lower() if isinstance(doi, str) else ""
+    venue_str = host_venue.lower() if isinstance(host_venue, str) else ""
 
-    # Safely normalize doi and host_venue to lowercase strings
-    if isinstance(doi, str):
-        doi_str = doi.lower()
-    else:
-        doi_str = ""
-
-    if isinstance(host_venue, str):
-        venue_str = host_venue.lower()
-    else:
-        venue_str = ""
-
-    # 1) DOI patterns associated with ICPSR/openICPSR dataset documentation
     if re.match(r"10\.3886/(icpsr|e)\d+", doi_str):
         return True
 
-    # 2) Venue keywords indicating ICPSR-originated content
     if any(k in venue_str for k in ICPSR_VENUE_KEYWORDS):
         return True
 
@@ -169,20 +191,12 @@ def is_icpsr_data_document(doi: str | None, host_venue: str | None) -> bool:
 
 
 def classify_icpsr_work(row):
-    """
-    Classify each work into one of three categories:
-      - 'not_icpsr_related'        : No ICPSR signals found.
-      - 'icpsr_data_doc'           : Dataset/project documentation
-                                     generated by ICPSR/openICPSR.
-      - 'research_article_using_icpsr': Scholarly articles that
-                                        use/cite ICPSR datasets.
-    """
-    has_any_icpsr = bool(row.get("has_icpsr")) or bool(row.get("ref_has_icpsr"))
-    if not has_any_icpsr:
+    """Classify works into ICPSR-related categories."""
+    has_any = bool(row.get("has_icpsr")) or bool(row.get("ref_has_icpsr"))
+    if not has_any:
         return "not_icpsr_related"
 
     doi = row.get("doi")
-    # in search_articles.py this is usually saved as host_venue
     venue = row.get("host_venue")
 
     if is_icpsr_data_document(doi, venue):
@@ -191,35 +205,14 @@ def classify_icpsr_work(row):
     return "research_article_using_icpsr"
 
 
+# -------------------------------------------------------------------
+# Detection pipeline
+# -------------------------------------------------------------------
+
 def run_detection(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Run ICPSR detection using two sources:
-
-    1) Text-based detection:
-       - Uses the 'fulltext' column (full text or abstract fallback)
-       - detect_icpsr_in_document(fulltext)
-
-    2) Reference-based detection:
-       - Uses the 'referenced_works' column (OpenAlex work IDs of cited works)
-       - Checks whether any referenced OpenAlex ID matches an ICPSR dataset
-         according to the ICPSR–OpenAlex mapping.
-
-    The function appends the following columns:
-      - has_icpsr                (bool, text-based)
-      - icpsr_doi                (from text-based detection)
-      - icpsr_study_number       (from text-based detection)
-      - detection_score
-      - max_signal_score
-      - signal_type
-      - snippet
-      - ref_has_icpsr            (bool, reference-based)
-      - ref_icpsr_work_ids       (comma-separated list of OpenAlex IDs)
-      - ref_icpsr_dois           (comma-separated list of ICPSR DOIs)
-      - ref_icpsr_study_numbers  (comma-separated list of ICPSR study numbers)
-    """
+    """Run text-based and reference-based ICPSR detection."""
     print("[STEP 4] Running ICPSR detection...")
 
-    # Text-based detection outputs
     has_icpsr_list = []
     doi_list = []
     study_list = []
@@ -228,30 +221,30 @@ def run_detection(df: pd.DataFrame) -> pd.DataFrame:
     signal_type_list = []
     snippet_list = []
 
-    # Reference-based detection outputs
-    ref_has_icpsr_list = []
-    ref_icpsr_work_ids_list = []
-    ref_icpsr_dois_list = []
-    ref_icpsr_studies_list = []
+    ref_has_list = []
+    ref_ids_list = []
+    ref_dois_list = []
+    ref_studies_list = []
 
     has_ref_col = "referenced_works" in df.columns
     if has_ref_col:
-        print("[INFO] referenced_works column found — reference-based detection enabled.")
+        print("[INFO] referenced_works column detected; enabling reference-based detection.")
     else:
-        print("[INFO] referenced_works column not found — reference-based detection disabled.")
+        print("[INFO] referenced_works column missing; reference-based detection disabled.")
 
     for i, (_, row) in enumerate(df.iterrows()):
         if i % 100 == 0:
-            print(f"  - Detecting row {i}/{len(df)}")
+            print(f"  Detecting row {i}/{len(df)}")
 
-        # -------------------------
-        # 1) Text-based detection
-        # -------------------------
-        text = row.get("fulltext") or ""
+        # Text detection
+        text = row.get("fulltext")
+        if not isinstance(text, str):
+            text = "" if pd.isna(text) else str(text)
+
         try:
             result = detect_icpsr_in_document(text)
         except Exception as e:
-            print(f"    [ERROR] text-based detection failed at row {i}: {e}")
+            print(f"[ERROR] Text detection failed at row {i}: {e}")
             result = {}
 
         has_icpsr_list.append(result.get("has_icpsr", False))
@@ -262,11 +255,9 @@ def run_detection(df: pd.DataFrame) -> pd.DataFrame:
         signal_type_list.append(result.get("signal_type"))
         snippet_list.append(result.get("snippet"))
 
-        # -------------------------
-        # 2) Reference-based detection
-        # -------------------------
-        ref_has_icpsr = False
-        matched_work_ids = []
+        # Reference detection
+        ref_has = False
+        matched_ids = []
         matched_dois = []
         matched_studies = []
 
@@ -275,25 +266,24 @@ def run_detection(df: pd.DataFrame) -> pd.DataFrame:
             ref_ids = _parse_referenced_works_cell(ref_raw)
 
             for rid in ref_ids:
-                if rid in ICPSR_WORK_ID_SET:
-                    ref_has_icpsr = True
-                    matched_work_ids.append(rid)
+                rid_str = str(rid)
+                if rid_str in ICPSR_WORK_ID_SET:
+                    ref_has = True
+                    matched_ids.append(rid_str)
 
-                    doi = ICPSR_WORK_ID_TO_DOI.get(rid)
+                    doi = ICPSR_WORK_ID_TO_DOI.get(rid_str)
                     if doi:
                         matched_dois.append(str(doi))
 
-                    study_no = ICPSR_WORK_ID_TO_STUDY.get(rid)
-                    if study_no is not None and study_no != "":
+                    study_no = ICPSR_WORK_ID_TO_STUDY.get(rid_str)
+                    if study_no:
                         matched_studies.append(str(study_no))
 
-        # Store reference-based results as simple strings for CSV compatibility
-        ref_has_icpsr_list.append(ref_has_icpsr)
-        ref_icpsr_work_ids_list.append(";".join(matched_work_ids) if matched_work_ids else "")
-        ref_icpsr_dois_list.append(";".join(sorted(set(matched_dois))) if matched_dois else "")
-        ref_icpsr_studies_list.append(";".join(sorted(set(matched_studies))) if matched_studies else "")
+        ref_has_list.append(ref_has)
+        ref_ids_list.append(";".join(matched_ids) if matched_ids else "")
+        ref_dois_list.append(";".join(sorted(set(matched_dois))) if matched_dois else "")
+        ref_studies_list.append(";".join(sorted(set(matched_studies))) if matched_studies else "")
 
-    # Attach text-based detection columns
     df["has_icpsr"] = has_icpsr_list
     df["icpsr_doi"] = doi_list
     df["icpsr_study_number"] = study_list
@@ -302,48 +292,37 @@ def run_detection(df: pd.DataFrame) -> pd.DataFrame:
     df["signal_type"] = signal_type_list
     df["snippet"] = snippet_list
 
-    # Attach reference-based detection columns
-    df["ref_has_icpsr"] = ref_has_icpsr_list
-    df["ref_icpsr_work_ids"] = ref_icpsr_work_ids_list
-    df["ref_icpsr_dois"] = ref_icpsr_dois_list
-    df["ref_icpsr_study_numbers"] = ref_icpsr_studies_list
+    df["ref_has_icpsr"] = ref_has_list
+    df["ref_icpsr_work_ids"] = ref_ids_list
+    df["ref_icpsr_dois"] = ref_dois_list
+    df["ref_icpsr_study_numbers"] = ref_studies_list
 
-    # --------------------------------------------------------
-    # Classify each work into ICPSR-related categories
-    # --------------------------------------------------------
+    # Classification
     df["icpsr_work_category"] = df.apply(classify_icpsr_work, axis=1)
 
-    print("[STEP 4] Detection completed!")
-    print(f"[SUMMARY] Text-based ICPSR detected in {df['has_icpsr'].sum()} out of {len(df)} articles")
-    if "ref_has_icpsr" in df.columns:
-        print(f"[SUMMARY] Reference-based ICPSR detected in {df['ref_has_icpsr'].sum()} out of {len(df)} articles")
-    print("[SUMMARY] ICPSR work-type categories:")
+    print("[STEP 4] ICPSR detection completed.")
+    print(f"[SUMMARY] Text-based detection: {df['has_icpsr'].sum()} articles")
+    print(f"[SUMMARY] Reference-based detection: {df['ref_has_icpsr'].sum()} articles")
+    print("[SUMMARY] Work categories:")
     print(df["icpsr_work_category"].value_counts())
 
     return df
 
 
+# -------------------------------------------------------------------
+# Dataset-level summary
+# -------------------------------------------------------------------
+
 def build_dataset_summary(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Build a dataset-level summary table aggregated by ICPSR study number.
-
-    Currently this uses text-based detection only:
-      - has_icpsr
-      - icpsr_study_number
-      - detection_score
-
-    If you later want to integrate reference-based detection, you could:
-      - explode 'ref_icpsr_study_numbers'
-      - treat those as additional dataset links.
-    """
+    """Aggregate results by ICPSR study number."""
     if "has_icpsr" not in df.columns or "icpsr_study_number" not in df.columns:
-        print("[DATASETS] Required columns not found.")
+        print("[DATASETS] Required columns missing.")
         return pd.DataFrame()
 
     ds = df[(df["has_icpsr"] == True) & df["icpsr_study_number"].notna()].copy()
 
     if ds.empty:
-        print("[DATASETS] No dataset-level rows.")
+        print("[DATASETS] No dataset-level detections found.")
         return pd.DataFrame()
 
     agg = ds.groupby("icpsr_study_number").agg(
@@ -352,32 +331,23 @@ def build_dataset_summary(df: pd.DataFrame) -> pd.DataFrame:
         mean_detection_score=("detection_score", "mean"),
     ).reset_index()
 
-    # Representative examples for each dataset
     cols_for_example = [c for c in ["title", "doi", "snippet"] if c in ds.columns]
 
     if cols_for_example:
-        ds_sorted = ds.sort_values(
-            ["icpsr_study_number", "detection_score"], ascending=[True, False]
-        )
-        examples = ds_sorted.drop_duplicates("icpsr_study_number")[
-            ["icpsr_study_number"] + cols_for_example
-        ]
+        ds_sorted = ds.sort_values(["icpsr_study_number", "detection_score"], ascending=[True, False])
+        examples = ds_sorted.drop_duplicates("icpsr_study_number")[["icpsr_study_number"] + cols_for_example]
         agg = agg.merge(examples, on="icpsr_study_number", how="left")
 
-    print(f"[DATASETS] Built dataset-level summary: {len(agg)} rows")
+    print(f"[DATASETS] Built dataset summary: {len(agg)} rows.")
     return agg
 
 
-def save_outputs(df: pd.DataFrame):
-    """
-    Save article-level, ICPSR-only, dataset-level, and clustering outputs.
+# -------------------------------------------------------------------
+# Output saving
+# -------------------------------------------------------------------
 
-    Files produced:
-      - articles_with_detection.csv       (all articles with detection fields)
-      - icpsr_articles_detected.csv       (subset with text-based ICPSR hits)
-      - icpsr_datasets_detected.csv       (dataset-level summary)
-      - clusters.csv                      (optional clustering output)
-    """
+def save_outputs(df: pd.DataFrame):
+    """Save article-level, dataset-level, and clustering results."""
     print("[STEP 5] Saving outputs...")
 
     articles_out = OUTPUT_DIR / "articles_with_detection.csv"
@@ -385,43 +355,42 @@ def save_outputs(df: pd.DataFrame):
     datasets_out = OUTPUT_DIR / "icpsr_datasets_detected.csv"
     clusters_out = OUTPUT_DIR / "clusters.csv"
 
-    # Full article-level results
     df.to_csv(articles_out, index=False)
-    print(f"[SAVE] Saved: {articles_out}")
+    print(f"[SAVE] {articles_out}")
 
-    # Only articles where ICPSR was detected (text-based)
     icpsr_df = df[df["has_icpsr"] == True].copy()
     icpsr_df.to_csv(icpsr_articles_out, index=False)
-    print(f"[SAVE] Saved: {icpsr_articles_out}")
+    print(f"[SAVE] {icpsr_articles_out}")
 
-    # Dataset-level summary
     ds_summary = build_dataset_summary(df)
-    if len(ds_summary) == 0:
-        print("[SAVE] Dataset summary empty. Nothing saved.")
+    if ds_summary.empty:
+        print("[SAVE] Dataset summary is empty. Skipping.")
         return
 
     ds_summary.to_csv(datasets_out, index=False)
-    print(f"[SAVE] Saved: {datasets_out}")
+    print(f"[SAVE] {datasets_out}")
 
-    # Clustering step (optional)
     try:
         from cluster import cluster_datasets
         clustered_df, sim_matrix = cluster_datasets(ds_summary)
         clustered_df.to_csv(clusters_out, index=False)
-        print(f"[SAVE] Clusters saved to: {clusters_out}")
+        print(f"[SAVE] {clusters_out}")
     except Exception as e:
         print(f"[WARNING] Clustering failed: {e}")
 
-    print("[STEP 5] All done!")
+    print("[STEP 5] Output saving complete.")
 
+
+# -------------------------------------------------------------------
+# Main
+# -------------------------------------------------------------------
 
 def main():
-    """Main entry point for running the full pipeline."""
     print("======= PIPELINE START =======")
     ensure_outputs_dir()
 
     df = build_articles_with_fulltext()
-    print("[DEBUG] Fulltext column exists?", "fulltext" in df.columns)
+    print("[DEBUG] Fulltext column exists:", "fulltext" in df.columns)
 
     df_detected = run_detection(df)
     save_outputs(df_detected)
