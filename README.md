@@ -23,24 +23,14 @@ Designed for bibliometrics researchers, data scientists, and science-of-science 
 ```mermaid
 flowchart TD
 
-    %% Central orchestrator
-    PIPE[pipeline.py<br><b>Main Orchestrator</b>]
+PIPE[pipeline.py<br>(Orchestrates Entire Workflow)]
 
-    %% Modules
-    A[search_articles.py<br>(Article Retrieval)]
-    B[fetch_fulltext.py<br>(Full-text / Abstract)]
-    C[detect_mentions.py<br>(ICPSR Detection)]
-    D[Classification<br>(3 labels)]
-    E[dataset_summary_only.py<br>(Dataset Aggregation)]
-    F[streamlit_app.py<br>(Interactive Dashboard)]
-
-    %% Flows
-    PIPE --> A
-    PIPE --> B
-    PIPE --> C
-    PIPE --> D
-    PIPE --> E
-    PIPE --> F
+A[Article Retrieval<br>(OpenAlex API)] --> PIPE
+PIPE --> B[Full-Text / Abstract Acquisition]
+PIPE --> C[ICPSR Detection Engine<br>- Text-based<br>- Reference-based]
+PIPE --> D[Article Classification<br>(3 labels)]
+PIPE --> E[Dataset Aggregation]
+PIPE --> F[Interactive Dashboard<br>(Streamlit)]
 
 ---
 
