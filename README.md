@@ -20,21 +20,70 @@ Designed for bibliometrics researchers, data scientists, and science-of-science 
 
 ### High-Level System Overview
 
-flowchart TD
-    PIPE["pipeline.py<br/>Main Orchestrator"]
-    A["Article Retrieval<br/>OpenAlex API"]
-    B["Full-Text or Abstract<br/>Acquisition"]
-    C["ICPSR Detection Engine<br/>Text-based + Reference-based"]
-    D["Article Classification<br/>3 labels"]
-    E["Dataset Aggregation"]
-    F["Interactive Dashboard<br/>Streamlit"]
-    
-    PIPE --> A
-    A --> B
-    B --> C
-    C --> D
-    D --> E
-    E --> F
+                     +--------------------------------+
+                     |      pipeline.py (Orchestrator) |
+                     |  - Calls each module in order   |
+                     |  - Manages inputs/outputs       |
+                     +--------------------------------+
+                                   |
+                                   v
+                 (1) Article Retrieval
+                 ----------------------
+                 • search_articles.py
+                 • Queries OpenAlex API
+                                   |
+                                   v
++-------------------------------------------------------------+
+|        outputs/articles.csv                                  |
+|  (Raw metadata: title, doi, authors, referenced_works ...)   |
++-------------------------------------------------------------+
+                                   |
+                                   v
+                 (2) Full-Text Acquisition
+                 --------------------------
+                 • fetch_fulltext.py
+                 • Publisher full text OR abstract fallback
+                                   |
+                                   v
++-------------------------------------------------------------+
+|        outputs/articles_with_detection.csv                   |
+|    (Articles + full text / abstract for detection)           |
++-------------------------------------------------------------+
+                                   |
+                                   v
+                 (3) ICPSR Detection Engine
+                 ---------------------------
+                 • detect_mentions.py
+                 • Text-based + reference-based signals
+                                   |
+                                   v
+                 (4) Article Classification
+                 ---------------------------
+                 • Done inside pipeline.py
+                 • research_article_using_icpsr
+                 • icpsr_data_doc
+                 • not_icpsr_related
+                                   |
+                                   v
++-------------------------------------------------------------+
+|        outputs/icpsr_articles_detected.csv                   |
++-------------------------------------------------------------+
+                                   |
+                                   v
+                 (5) Dataset Aggregation
+                 ------------------------
+                 • dataset_summary_only.py
+                                   |
+                                   v
++-------------------------------------------------------------+
+|        outputs/icpsr_datasets_detected.csv                   |
++-------------------------------------------------------------+
+                                   |
+                                   v
+                 (6) Interactive Dashboard
+                 --------------------------
+                 • Streamlit (app/streamlit_app.py)
+                 • Article Explorer / Dataset Rankings / Journal Lens
 
 ---
 
