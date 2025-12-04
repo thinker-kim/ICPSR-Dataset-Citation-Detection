@@ -1,24 +1,29 @@
-# detect_mentions.py
-
 import re
 from dataclasses import dataclass
 from typing import List, Dict, Any
 
-
-# 1) DOI 패턴 (필요시 LLM으로 후보 늘리고 수동 정제해서 여기에 넣기)
+# ---------------------------------------------------------------
+# 1) DOI patterns
+#    (Can be expanded using LLM-suggested candidates and cleaned manually)
+# ---------------------------------------------------------------
 DOI_PATTERNS = [
-    r"10\.3886/ICPSR\d+\.v\d+",       # 정식 DOI
-    r"10\.3886/ICPSR\d+",             # 버전 없이 쓰인 DOI
+    r"10\.3886/ICPSR\d+\.v\d+",   # DOI with version
+    r"10\.3886/ICPSR\d+",         # DOI without version
 ]
 
-# 2) Study Number 패턴
+# ---------------------------------------------------------------
+# 2) ICPSR Study Number patterns
+# ---------------------------------------------------------------
 STUDY_PATTERNS = [
     r"ICPSR\s*Study\s*No\.?\s*(\d+)",
     r"ICPSR\s*#\s*(\d+)",
-    r"ICPSR\s*(\d{4,6})",             # 예: ICPSR 8079
+    r"ICPSR\s*(\d{4,6})",         # e.g., ICPSR 8079
 ]
 
-# 3) 데이터 활용 맥락(verb-centered context) — LLM이 제안한 표현들 계속 추가 가능
+# ---------------------------------------------------------------
+# 3) Verb-centered usage context patterns
+#    (LLM-suggested expressions—can be expanded over time)
+# ---------------------------------------------------------------
 VERB_CONTEXT_PATTERNS = [
     r"data\s+used\s+from\s+the\s+ICPSR",
     r"data\s+retrieved\s+from\s+the\s+ICPSR",
@@ -28,10 +33,13 @@ VERB_CONTEXT_PATTERNS = [
     r"datasets?\s+provided\s+by\s+ICPSR",
     r"data\s+obtained\s+from\s+ICPSR",
     r"data\s+were\s+drawn\s+from\s+ICPSR",
-    # LLM을 사용해서 "leveraged", "relied on", "sourced from" 등도 계속 확장 가능
+    # can extend: "leveraged", "relied on", "sourced from", etc.
 ]
 
-# 4) 오탐을 줄이기 위한 부정 패턴(예시 문맥 등)
+# ---------------------------------------------------------------
+# 4) Negative patterns — contexts where ICPSR is mentioned
+#    only as an example or among general repositories
+# ---------------------------------------------------------------
 NEGATIVE_PATTERNS = [
     r"repositories\s+such\s+as\s+ICPSR",
     r"repositories\s+like\s+ICPSR",
@@ -39,7 +47,9 @@ NEGATIVE_PATTERNS = [
     r"for\s+example,\s+ICPSR",
 ]
 
-# 5) 신호별 가중치
+# ---------------------------------------------------------------
+# 5) Scoring weights for each type of signal
+# ---------------------------------------------------------------
 WEIGHTS = {
     "doi": 3,
     "verb_context": 2,
@@ -50,6 +60,7 @@ WEIGHTS = {
 
 @dataclass
 class DetectionResult:
+    """Container for individual ICPSR detection signals."""
     doi: str | None
     study_number: str | None
     signal_type: str
@@ -57,22 +68,30 @@ class DetectionResult:
     snippet: str
 
 
+# ---------------------------------------------------------------
+# Negative context filter
+# ---------------------------------------------------------------
 def has_negative_context(text: str) -> bool:
+    """Return True if the sentence matches any negative (non-usage) context."""
     for pat in NEGATIVE_PATTERNS:
         if re.search(pat, text, flags=re.IGNORECASE):
             return True
     return False
 
 
+# ---------------------------------------------------------------
+# Detection within a single sentence
+# ---------------------------------------------------------------
 def detect_icpsr_in_sentence(sentence: str) -> List[DetectionResult]:
+    """Detect ICPSR-related signals within a single sentence."""
     sent_lower = sentence.lower()
     results: List[DetectionResult] = []
 
-    # 부정 문맥이면 바로 패스
+    # If negative context is detected, skip the sentence
     if has_negative_context(sentence):
         return results
 
-    # 1) DOI 패턴
+    # 1) DOI pattern detection
     for pat in DOI_PATTERNS:
         for m in re.finditer(pat, sentence, flags=re.IGNORECASE):
             results.append(
@@ -85,7 +104,7 @@ def detect_icpsr_in_sentence(sentence: str) -> List[DetectionResult]:
                 )
             )
 
-    # 2) Study Number
+    # 2) Study number detection
     for pat in STUDY_PATTERNS:
         for m in re.finditer(pat, sentence, flags=re.IGNORECASE):
             study = m.group(m.lastindex) if m.lastindex else None
@@ -99,7 +118,7 @@ def detect_icpsr_in_sentence(sentence: str) -> List[DetectionResult]:
                 )
             )
 
-    # 3) 데이터 활용 맥락(verb-centered context)
+    # 3) Verb-centered usage context
     for pat in VERB_CONTEXT_PATTERNS:
         if re.search(pat, sentence, flags=re.IGNORECASE):
             results.append(
@@ -112,7 +131,7 @@ def detect_icpsr_in_sentence(sentence: str) -> List[DetectionResult]:
                 )
             )
 
-    # 4) ICPSR 단어만 있는 경우(최소 신호)
+    # 4) ICPSR keyword-only (weakest signal)
     if "icpsr" in sent_lower and not results:
         results.append(
             DetectionResult(
@@ -127,15 +146,23 @@ def detect_icpsr_in_sentence(sentence: str) -> List[DetectionResult]:
     return results
 
 
+# ---------------------------------------------------------------
+# Sentence splitter
+# ---------------------------------------------------------------
 def split_into_sentences(text: str) -> List[str]:
-    # 아주 단순한 문장 분할 (이미 더 좋은 util 있으면 그걸 써도 됨)
+    """A simple sentence splitter. Replace with a stronger NLP tool if needed."""
     return re.split(r"(?<=[.!?])\s+", text.strip())
 
 
+# ---------------------------------------------------------------
+# Document-level ICPSR detection
+# ---------------------------------------------------------------
 def detect_icpsr_in_document(text: str) -> Dict[str, Any]:
     """
-    전체 본문 텍스트에서 문장 단위로 탐지하고,
-    문서 단위 composite score 및 대표 신호를 반환.
+    Detect ICPSR mentions at the document level.
+    - Scan sentence by sentence
+    - Aggregate detection signals
+    - Return composite score and representative signal
     """
     sentences = split_into_sentences(text)
     all_results: List[DetectionResult] = []
@@ -149,7 +176,7 @@ def detect_icpsr_in_document(text: str) -> Dict[str, Any]:
     total_score = sum(r.score for r in all_results)
     max_score = max(r.score for r in all_results)
 
-    # 총점이 너무 낮으면 그냥 배제 (예: keyword_only 한 번 정도)
+    # Weak signals (e.g., only one 'keyword_only') are ignored
     if total_score < 3:
         return {"has_icpsr": False}
 
