@@ -7,32 +7,17 @@ from pathlib import Path
 
 import streamlit.components.v1 as components
 
-# 시각화 / ML 관련 라이브러리들
+# Visualization / ML libraries (some may be unused in the current UI but kept for future extensions)
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 import matplotlib.pyplot as plt
-
 import networkx as nx
 from pyvis.network import Network
 
-# 선택적: UMAP, SciPy (없으면 graceful fallback)
-try:
-    import umap
-    HAS_UMAP = True
-except ImportError:
-    HAS_UMAP = False
-
-try:
-    from scipy.cluster.hierarchy import linkage, dendrogram
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
-
-
 # --------------------------------------------------
-# 기본 설정 및 데이터 로딩
+# Basic config and data loading
 # --------------------------------------------------
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,62 +26,146 @@ OUT = ROOT / "outputs"
 st.set_page_config(page_title="ICPSR Dataset Citation Detector", layout="wide")
 st.title("ICPSR Dataset Citation Detector — Dashboard")
 
-# 파일 경로 (파이프라인에서 생성되는 이름과 일치시킴)
-articles_fp = OUT / "icpsr_articles_detected.csv"      # 논문 단위 결과
-datasets_fp = OUT / "icpsr_datasets_detected.csv"      # 데이터셋 단위 summary
-clusters_fp = OUT / "clusters.csv"                     # 선택적
+st.caption(
+    """
+This dashboard helps you quickly answer:
 
+- **Which articles reuse ICPSR datasets?**  
+- **Which ICPSR datasets are reused most often?**  
+- **Which journals reuse ICPSR data, and in what ways?**
+    """
+)
 
-# 필수 파일 체크
+# File paths (must match the filenames created by the pipeline)
+articles_fp = OUT / "icpsr_articles_detected.csv"      # article-level results
+datasets_fp = OUT / "icpsr_datasets_detected.csv"      # dataset-level summary
+
+# If there are no article-level outputs, stop the app early
 if not articles_fp.exists():
     st.warning(
         "No article-level outputs found.\n\n"
         "Run the pipeline first, e.g.:\n"
-        "`python scripts/pipeline.py`"
+        "`python scripts/pipeline_2.py`"
     )
     st.stop()
 
 
 @st.cache_data
 def load_data():
-    """CSV들을 한 번만 읽어서 캐시."""
-    # 논문 단위 결과
+    """
+    Load CSV files once and cache them.
+
+    Returns:
+        articles (DataFrame): article-level results.
+        datasets (DataFrame): dataset-level summary.
+    """
+    # Article-level results
     arts = pd.read_csv(articles_fp)
 
-    # icpsr_ids 컬럼이 있을 때만 파싱 시도 (없으면 건너뜀)
-    if "icpsr_ids" in arts.columns and arts["icpsr_ids"].dtype == object:
-        try:
-            arts["icpsr_ids"] = arts["icpsr_ids"].apply(
-                lambda s: eval(s) if isinstance(s, str) and isinstance(s, str) and s.startswith("[") else s
-            )
-        except Exception:
-            # 이상하면 그냥 원본 유지
-            pass
+    # Normalize common column names
+    if "publication_year" in arts.columns and "year" not in arts.columns:
+        arts["year"] = arts["publication_year"]
 
-    # 데이터셋 summary / 클러스터 (없으면 빈 DF)
+    if "host_venue" in arts.columns and "journal" not in arts.columns:
+        arts["journal"] = arts["host_venue"]
+
+    # Dataset summary
     dsets = pd.read_csv(datasets_fp) if datasets_fp.exists() else pd.DataFrame()
-    clus = pd.read_csv(clusters_fp) if clusters_fp.exists() else pd.DataFrame()
 
-    return arts, dsets, clus
+    # Build ICPSR links if study numbers are available
+    if not dsets.empty and "icpsr_study_number" in dsets.columns:
+        dsets = dsets.copy()
+        dsets["ICPSR Link"] = dsets["icpsr_study_number"].apply(
+            lambda x: f"https://www.icpsr.umich.edu/web/ICPSR/studies/{int(x)}"
+            if pd.notna(x) else ""
+        )
+
+    return arts, dsets
 
 
-articles, datasets, clusters = load_data()
+articles, datasets = load_data()
+
+# --------------------------------------------------
+# Work-type and "linked dataset" flags
+# --------------------------------------------------
+
+# True if we have an actual ICPSR dataset link (study number)
+if "icpsr_study_number" in articles.columns:
+    articles["has_dataset_link"] = articles["icpsr_study_number"].notna()
+else:
+    articles["has_dataset_link"] = False
+
+# Split by work category (research vs ICPSR docs)
+if "icpsr_work_category" in articles.columns:
+    mask_research = articles["icpsr_work_category"] == "research_article_using_icpsr"
+    mask_docs = articles["icpsr_work_category"] == "icpsr_data_doc"
+    articles_research = articles[mask_research].copy()
+    articles_docs = articles[mask_docs].copy()
+else:
+    # Fallback: treat everything as research
+    articles_research = articles.copy()
+    articles_docs = pd.DataFrame()
+
+# Research articles that ALSO have an identified ICPSR dataset
+if not articles_research.empty and "has_dataset_link" in articles_research.columns:
+    articles_research_linked = articles_research[
+        articles_research["has_dataset_link"]
+    ].copy()
+else:
+    articles_research_linked = pd.DataFrame()
+
+# Basic year statistics for *linked* research articles
+RESEARCH_YEAR_MIN = None
+RESEARCH_YEAR_MAX = None
+if "year" in articles_research_linked.columns:
+    _years_num = pd.to_numeric(articles_research_linked["year"], errors="coerce")
+    if _years_num.notna().any():
+        RESEARCH_YEAR_MIN = int(_years_num.min())
+        RESEARCH_YEAR_MAX = int(_years_num.max())
 
 
 # --------------------------------------------------
-# 헬퍼 함수들
+# Helper functions
 # --------------------------------------------------
 
-def filter_articles(df: pd.DataFrame, q: str, only_hits: bool,
-                    year_min: int, year_max: int) -> pd.DataFrame:
-    """검색어 / has_icpsr / 연도 범위로 articles를 필터링."""
+def filter_articles(
+    df: pd.DataFrame,
+    q: str,
+    only_hits: bool,
+    only_linked: bool,
+    year_min: int,
+    year_max: int,
+    article_type: str,
+) -> pd.DataFrame:
+    """
+    Filter articles by:
+      - ICPSR detection flag (has_icpsr)
+      - having an identified dataset link (has_dataset_link)
+      - article type (icpsr_work_category)
+      - textual query (title / DOI / authors / journal)
+      - publication year range (if available)
+    """
     f = df.copy()
 
-    # ICPSR 검출된 논문만 보기
+    # 1) only ICPSR text-based hits
     if only_hits and "has_icpsr" in f.columns:
         f = f[f["has_icpsr"] == True]
 
-    # 텍스트 검색 (title / doi / authors / journal)
+    # 2) only works with a resolved dataset link
+    if only_linked and "has_dataset_link" in f.columns:
+        f = f[f["has_dataset_link"] == True]
+
+    # 3) filter by article type
+    if "icpsr_work_category" in f.columns:
+        if article_type == "Research articles using ICPSR datasets":
+            f = f[f["icpsr_work_category"] == "research_article_using_icpsr"]
+        elif article_type == "ICPSR data / project docs":
+            f = f[f["icpsr_work_category"] == "icpsr_data_doc"]
+        else:
+            # "All ICPSR-related works" → keep all rows as-is
+            pass
+
+    # 4) text search
     if q:
         ql = q.lower()
         cols = ["title", "doi", "authors", "journal"]
@@ -108,7 +177,7 @@ def filter_articles(df: pd.DataFrame, q: str, only_hits: bool,
         if not isinstance(mask, bool):
             f = f[mask]
 
-    # 연도 필터 (year 컬럼이 있을 때만)
+    # 5) year range
     if "year" in f.columns:
         try:
             years = pd.to_numeric(f["year"], errors="coerce")
@@ -119,135 +188,87 @@ def filter_articles(df: pd.DataFrame, q: str, only_hits: bool,
     return f
 
 
-def get_dataset_feature_matrix(dsets: pd.DataFrame):
-    """
-    UMAP / t-SNE / PCA / dendrogram용 feature matrix 생성.
-    주로 숫자형 컬럼들(n_articles, max_detection_score, mean_detection_score)을 사용.
-    """
-    if dsets.empty:
-        return None, None
-
-    df = dsets.copy()
-
-    # 후보 numeric 컬럼
-    candidate_cols = [
-        "n_articles",
-        "max_detection_score",
-        "mean_detection_score",
-    ]
-    num_cols = [c for c in candidate_cols if c in df.columns]
-
-    # 없으면 다른 numeric 컬럼 찾기
-    if not num_cols:
-        num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-
-    if not num_cols:
-        return None, None
-
-    # NaN 제거
-    df_num = df[num_cols].copy()
-    df_num = df_num.replace([np.inf, -np.inf], np.nan).dropna()
-    df = df.loc[df_num.index]
-
-    if df_num.empty:
-        return None, None
-
-    X = df_num.values.astype(float)
-
-    # 스케일링
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    return df, X_scaled
-
-
-def build_bipartite_graph(articles_df: pd.DataFrame,
-                          max_articles: int = 200,
-                          max_datasets: int = 200):
-    """
-    논문-데이터셋 이분 그래프 생성.
-    노드: article, dataset(icpsr_study_number)
-    엣지: article -> dataset
-    """
-    if "icpsr_study_number" not in articles_df.columns:
-        return None
-
-    df = articles_df.copy()
-    df = df[df["icpsr_study_number"].notna()]
-
-    if df.empty:
-        return None
-
-    # 제한 걸기 (큰 그래프 방지)
-    df = df.iloc[:max_articles]
-
-    G = nx.Graph()
-
-    # 데이터셋 노드 제한
-    dataset_values = df["icpsr_study_number"].unique()[:max_datasets]
-    allowed_datasets = set(dataset_values)
-
-    for idx, row in df.iterrows():
-        art_id = f"ART:{idx}"
-        title = str(row.get("title", ""))[:80]
-        study = row["icpsr_study_number"]
-
-        if study not in allowed_datasets:
-            continue
-
-        ds_id = f"DS:{study}"
-
-        # article node
-        G.add_node(
-            art_id,
-            label=f"Article\n{title}",
-            bipartite="article",
-        )
-
-        # dataset node
-        G.add_node(
-            ds_id,
-            label=f"ICPSR {study}",
-            bipartite="dataset",
-        )
-
-        # edge
-        G.add_edge(art_id, ds_id)
-
-    if G.number_of_nodes() == 0:
-        return None
-
-    return G
-
-
-def render_pyvis_graph(G: nx.Graph, height: str = "600px"):
-    """
-    PyVis로 bipartite 그래프를 렌더링하고 Streamlit에 embed.
-    """
-    net = Network(height=height, width="100%", notebook=False, bgcolor="#ffffff", font_color="black")
-    net.barnes_hut()
-
-    # PyVis graph로 변환
-    for node, data in G.nodes(data=True):
-        label = data.get("label", node)
-        group = data.get("bipartite", "other")
-        net.add_node(node, label=label, group=group)
-
-    for u, v in G.edges():
-        net.add_edge(u, v)
-
-    # HTML 생성
-    html = net.generate_html(notebook=False)
-    components.html(html, height=600, scrolling=True)
-
-
 # --------------------------------------------------
-# 사이드바 / 필터 UI
+# 1. Overview – ICPSR dataset reuse at a glance
 # --------------------------------------------------
 
-with st.expander("Search / Filter", expanded=True):
-    q = st.text_input("Filter articles by title / DOI / author / journal", "")
-    only_hits = st.checkbox("Show only articles with ICPSR mentions", value=True)
+st.markdown("## Overview – ICPSR dataset reuse at a glance")
+
+# Metrics are based on *research articles that have an identified ICPSR dataset*
+n_research_linked = len(articles_research_linked)
+n_research_mentions = len(articles_research)  # all research articles with ICPSR mention
+
+n_journals_linked = (
+    int(articles_research_linked["journal"].nunique())
+    if "journal" in articles_research_linked.columns and not articles_research_linked.empty
+    else None
+)
+n_datasets_linked = (
+    int(articles_research_linked["icpsr_study_number"].dropna().nunique())
+    if "icpsr_study_number" in articles_research_linked.columns and not articles_research_linked.empty
+    else None
+)
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Research articles with identified ICPSR dataset", n_research_linked)
+if n_journals_linked is not None:
+    col2.metric("Journals with ICPSR dataset reuse", n_journals_linked)
+if n_datasets_linked is not None:
+    col3.metric("Distinct ICPSR datasets reused", n_datasets_linked)
+if RESEARCH_YEAR_MIN is not None and RESEARCH_YEAR_MAX is not None:
+    col4.metric("Publication year range", f"{RESEARCH_YEAR_MIN}–{RESEARCH_YEAR_MAX}")
+else:
+    col4.metric("Publication year range", "n/a")
+
+total_docs = len(articles_docs)
+n_research_unlinked = max(n_research_mentions - n_research_linked, 0)
+
+st.markdown(
+    f"""
+All metrics above refer to **research articles where a specific ICPSR dataset is identified**
+(via `icpsr_study_number`), not just general mentions of ICPSR.
+
+- Research articles with any ICPSR mention: **{n_research_mentions}**  
+- …of which, with a resolved ICPSR dataset: **{n_research_linked}**  
+- ICPSR data / project documentation pages: **{total_docs}**
+    """
+)
+
+st.markdown("---")
+
+# --------------------------------------------------
+# 2. Article browser – explore individual papers
+# --------------------------------------------------
+
+st.markdown("## Article browser – explore individual papers")
+
+with st.expander("Search / filter options", expanded=True):
+    q = st.text_input("Filter by title / DOI / author / journal", "")
+
+    only_hits = st.checkbox(
+        "Show only articles with ICPSR mentions",
+        value=True,
+        help="If checked, keep only rows where text-based detection (has_icpsr) is True.",
+    )
+
+    only_linked = st.checkbox(
+        "Show only works with an identified ICPSR dataset (study number)",
+        value=False,
+        help="If checked, keep only rows where an ICPSR study number is resolved.",
+    )
+
+    article_type = st.radio(
+        "Article type",
+        options=[
+            "All ICPSR-related works",
+            "Research articles using ICPSR datasets",
+            "ICPSR data / project docs",
+        ],
+        index=1,
+        horizontal=True,
+        help="Use the classification from `icpsr_work_category`.",
+    )
+
     year_min, year_max = st.slider(
         "Year range (if available in data)",
         1900,
@@ -255,48 +276,149 @@ with st.expander("Search / Filter", expanded=True):
         (1900, 2030),
     )
 
+# Apply filters
+filtered_articles = filter_articles(
+    articles,
+    q=q,
+    only_hits=only_hits,
+    only_linked=only_linked,
+    year_min=year_min,
+    year_max=year_max,
+    article_type=article_type,
+)
 
-# --------------------------------------------------
-# Articles 테이블
-# --------------------------------------------------
+st.markdown(
+    """
+This section lists ICPSR-related works.  
+Use the filters above to narrow by **text**, **year**, **work type**, and whether a
+**specific ICPSR dataset is identified**.
+    """
+)
 
-st.subheader("Articles")
+# ----- counts (overall vs. current filters) -----
+total_articles = len(articles)
 
-filtered_articles = filter_articles(articles, q, only_hits, year_min, year_max)
+if "has_icpsr" in articles.columns:
+    total_hits = int(articles["has_icpsr"].sum())
+else:
+    total_hits = None
+
+if "has_dataset_link" in articles.columns:
+    total_linked = int(articles["has_dataset_link"].sum())
+else:
+    total_linked = None
+
+if "icpsr_work_category" in articles.columns:
+    cat_total = articles["icpsr_work_category"].value_counts()
+    total_research_all = int(cat_total.get("research_article_using_icpsr", 0))
+    total_data_docs_all = int(cat_total.get("icpsr_data_doc", 0))
+else:
+    total_research_all = None
+    total_data_docs_all = None
+
+filtered_count = len(filtered_articles)
+if "has_icpsr" in filtered_articles.columns:
+    filtered_hits = int(filtered_articles["has_icpsr"].sum())
+else:
+    filtered_hits = None
+
+if "has_dataset_link" in filtered_articles.columns:
+    filtered_linked = int(filtered_articles["has_dataset_link"].sum())
+else:
+    filtered_linked = None
+
+if "icpsr_work_category" in filtered_articles.columns:
+    cat_filt = filtered_articles["icpsr_work_category"].value_counts()
+    filtered_research = int(cat_filt.get("research_article_using_icpsr", 0))
+    filtered_data_docs = int(cat_filt.get("icpsr_data_doc", 0))
+else:
+    filtered_research = None
+    filtered_data_docs = None
+
+st.markdown("### Counts")
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total ICPSR-related works", total_articles)
+if total_hits is not None:
+    c2.metric("Articles with ICPSR mentions", total_hits)
+if total_linked is not None:
+    c3.metric("Works with identified dataset (all)", total_linked)
+if total_research_all is not None:
+    c4.metric("Research articles using ICPSR (all)", total_research_all)
+
+c5, c6, c7, c8 = st.columns(4)
+c5.metric("Articles matching current filters", filtered_count)
+if filtered_hits is not None:
+    c6.metric("ICPSR mentions (current filters)", filtered_hits)
+if filtered_linked is not None:
+    c7.metric("With identified dataset (current filters)", filtered_linked)
+if filtered_data_docs is not None:
+    c8.metric("Data / project docs (current filters)", filtered_data_docs)
+
+# ----- table + details -----
+
+table_df = filtered_articles.reset_index(drop=True)
+table_df.insert(0, "row_id", table_df.index)
+
 st.dataframe(
-    filtered_articles,
-    use_container_width=True,
+    table_df,
+    width="stretch",
     height=320,
     hide_index=True,
 )
 
-# 상세 정보 선택 (원하면)
-if not filtered_articles.empty:
+if not table_df.empty:
     st.markdown("### Article details")
-    idx = st.number_input(
-        "Select row index",
-        min_value=0,
-        max_value=len(filtered_articles) - 1,
-        value=0,
-        step=1,
+
+    # Select row via dropdown (shows row_id + truncated title)
+    def _fmt_row(i: int) -> str:
+        row = table_df.loc[i]
+        title = str(row.get("title", "") or "")
+        if len(title) > 90:
+            title = title[:90] + "…"
+        return f"[{i}] {title}"
+
+    selected_row = st.selectbox(
+        "Select a row to inspect",
+        options=table_df.index.tolist(),
+        format_func=_fmt_row,
     )
-    row = filtered_articles.iloc[int(idx)]
+
+    row = table_df.loc[selected_row]
+
+    st.markdown(f"**row_id:** {int(selected_row)}")
     st.markdown(f"**Title:** {row.get('title', '')}")
-    st.markdown(f"**DOI:** {row.get('doi', '')}")
+
+    # DOI as clickable link if possible
+    doi_val = row.get("doi", "")
+    if isinstance(doi_val, str) and doi_val.strip():
+        doi_str = doi_val.strip()
+        if doi_str.startswith("http"):
+            doi_url = doi_str
+        else:
+            doi_url = f"https://doi.org/{doi_str}"
+        st.markdown(f"**DOI:** [{doi_str}]({doi_url})")
+    else:
+        st.markdown("**DOI:**")
+
+    st.markdown(f"**Authors:** {row.get('authors', '')}")
+    st.markdown(f"**Journal:** {row.get('journal', '')}")
     st.markdown(f"**ICPSR study number:** {row.get('icpsr_study_number', '')}")
     st.markdown(f"**Detection score:** {row.get('detection_score', '')}")
     st.markdown(f"**Signal type:** {row.get('signal_type', '')}")
     if row.get("snippet"):
         st.code(str(row["snippet"]), language="text")
 
+st.markdown("---")
 
 # --------------------------------------------------
-# Datasets & Clusters
+# 3. Which ICPSR datasets are most frequently reused?
+#    (based on research articles with identified datasets)
 # --------------------------------------------------
 
-st.subheader("ICPSR Datasets & Clusters")
+st.markdown("## 3. Which ICPSR datasets are most frequently reused?")
 
-if datasets.empty:
+if datasets.empty or "icpsr_study_number" not in datasets.columns:
     st.info(
         "No dataset-level summary found.\n\n"
         "If you already have article-level results, you can build the "
@@ -304,161 +426,429 @@ if datasets.empty:
         "`python scripts/dataset_summary_only.py`"
     )
 else:
-    # ---- ICPSR 링크 생성 ----
-    if "icpsr_study_number" in datasets.columns:
-        datasets = datasets.copy()
-        datasets["ICPSR Link"] = datasets["icpsr_study_number"].apply(
-            lambda x: f"https://www.icpsr.umich.edu/web/ICPSR/studies/{int(x)}"
-            if pd.notna(x) else ""
+    if articles_research_linked.empty or "icpsr_study_number" not in articles_research_linked.columns:
+        st.info(
+            "No research articles with a resolved `icpsr_study_number` were found."
+        )
+    else:
+        # ---------- 3-1. 연구 논문에서 실제로 재사용된 데이터셋 집계 ----------
+        usage = articles_research_linked.dropna(subset=["icpsr_study_number"]).copy()
+
+        # study number 형식을 통일 (2 vs 2.0 문제 방지)
+        usage["icpsr_study_number_norm"] = pd.to_numeric(
+            usage["icpsr_study_number"], errors="coerce"
+        ).astype("Int64")
+
+        dsets_usage = datasets.copy()
+        dsets_usage["icpsr_study_number_norm"] = pd.to_numeric(
+            dsets_usage["icpsr_study_number"], errors="coerce"
+        ).astype("Int64")
+
+        # 연구 논문 수 집계
+        ds_counts = (
+            usage.groupby("icpsr_study_number_norm")
+            .size()
+            .reset_index(name="n_articles_using_dataset")
         )
 
-    st.dataframe(
-        datasets,
-        use_container_width=True,
-        height=320,
-        hide_index=True,
-    )
-
-    st.markdown(
-        """
-        🔗 **Click the links to view each dataset on ICPSR.org**
-
-        *(Links appear in the “ICPSR Link” column above.)*
-        """
-    )
-
-    # cluster 컬럼 있을 때만 클러스터 필터링 제공
-    if "cluster" in datasets.columns:
-        st.markdown("### View by cluster")
-        cluster_ids = sorted(datasets["cluster"].dropna().unique())
-        sel = st.multiselect(
-            "Select clusters to view",
-            cluster_ids,
-            default=cluster_ids[: min(5, len(cluster_ids))],
+        # dataset summary와 merge
+        dsets_usage = dsets_usage.merge(
+            ds_counts,
+            on="icpsr_study_number_norm",
+            how="left",
+        )
+        dsets_usage["n_articles_using_dataset"] = (
+            dsets_usage["n_articles_using_dataset"].fillna(0).astype(int)
         )
 
-        df_cluster_sel = datasets[datasets["cluster"].isin(sel)]
+        total_unique_dsets = dsets_usage["icpsr_study_number"].nunique()
+        reused_dsets = (dsets_usage["n_articles_using_dataset"] > 0).sum()
+
+        col1, col2 = st.columns(2)
+        col1.metric("Distinct ICPSR datasets in summary", int(total_unique_dsets))
+        col2.metric("Datasets reused at least once", int(reused_dsets))
+
+        # ---------- 3-2. 상위 N개 데이터셋 테이블 ----------
+        top_n = st.slider("How many top datasets to show?", 5, 50, 20, step=5)
+
+        top_dsets = (
+            dsets_usage.sort_values("n_articles_using_dataset", ascending=False)
+            .head(top_n)
+        )
+
+        preferred_cols = [
+            "icpsr_study_number",
+            "title",
+            "n_articles_using_dataset",
+            "n_articles",           # dataset summary 내 전체 논문 수(있으면)
+            "max_detection_score",
+            "mean_detection_score",
+            "ICPSR Link",
+        ]
+        show_cols = [c for c in preferred_cols if c in top_dsets.columns]
+        if not show_cols:
+            show_cols = top_dsets.columns.tolist()
 
         st.dataframe(
-            df_cluster_sel,
-            use_container_width=True,
-            height=300,
+            top_dsets[show_cols],
+            width="stretch",
+            height=320,
             hide_index=True,
         )
 
-        # 선택한 클러스터 데이터셋 링크
-        if not df_cluster_sel.empty:
-            st.markdown("### Selected cluster datasets — ICPSR Links")
-            for _, r in df_cluster_sel.iterrows():
+        # ---------- 3-3. 특정 데이터셋 + 연결된 연구 논문 디테일 ----------
+        st.markdown("### Dataset details and linked research articles")
+
+        # 상위 N개 중 실제로 연구 논문이 연결된 데이터셋만 선택지로
+        top_with_use = top_dsets[top_dsets["n_articles_using_dataset"] > 0].copy()
+
+        if top_with_use.empty:
+            st.info("None of the top datasets have linked research articles yet.")
+        else:
+            # 선택할 옵션: study number + 제목 + n_articles_using_dataset
+            def _fmt_ds(sid_norm):
+                r = top_with_use[
+                    top_with_use["icpsr_study_number_norm"] == sid_norm
+                ].head(1)
+                if r.empty:
+                    return str(sid_norm)
+                row = r.iloc[0]
+                sid = row.get("icpsr_study_number", sid_norm)
+                title = str(row.get("title", "") or "")
+                if len(title) > 80:
+                    title = title[:80] + "…"
+                n_use = int(row.get("n_articles_using_dataset", 0))
+                return f"{sid} · {title} (n={n_use})"
+
+            sel_ds_norm = st.selectbox(
+                "Select a dataset",
+                options=top_with_use["icpsr_study_number_norm"].dropna().unique().tolist(),
+                format_func=_fmt_ds,
+            )
+
+            ds_row = top_with_use[
+                top_with_use["icpsr_study_number_norm"] == sel_ds_norm
+            ].head(1).iloc[0]
+
+            # ----- 데이터셋 메타 정보 -----
+            st.markdown("#### Dataset metadata")
+
+            st.markdown(
+                f"**ICPSR study number:** {ds_row.get('icpsr_study_number', sel_ds_norm)}"
+            )
+            st.markdown(f"**Title:** {ds_row.get('title', '')}")
+
+            link_val = ds_row.get("ICPSR Link", "")
+            if isinstance(link_val, str) and link_val.strip():
+                st.markdown(f"**ICPSR Link:** [{link_val}]({link_val})")
+            else:
+                st.markdown("**ICPSR Link:**")
+
+            if "n_articles" in ds_row:
                 st.markdown(
-                    f"- [{r['icpsr_study_number']} — {r.get('title','(no title)')}]"
-                    f"({r.get('ICPSR Link','')})"
+                    f"**Total articles (all ICPSR mentions) for this dataset:** "
+                    f"{int(ds_row['n_articles'])}"
+                )
+
+            if "n_articles_using_dataset" in ds_row:
+                st.markdown(
+                    f"**Research articles with explicit dataset link:** "
+                    f"{int(ds_row['n_articles_using_dataset'])}"
+                )
+
+            if "max_detection_score" in ds_row and "mean_detection_score" in ds_row:
+                st.markdown(
+                    f"**Detection score (max / mean):** "
+                    f"{ds_row['max_detection_score']} / {ds_row['mean_detection_score']}"
+                )
+
+            # ----- 이 데이터셋을 사용하는 연구 논문 리스트 -----
+            st.markdown("#### Linked research articles")
+
+            arts_ds = usage[
+                usage["icpsr_study_number_norm"] == sel_ds_norm
+            ].copy()
+
+            if arts_ds.empty:
+                st.info("No linked research articles found for this dataset.")
+            else:
+                cols_art_pref = [
+                    "title",
+                    "year",
+                    "journal",
+                    "doi",
+                    "detection_score",
+                    "signal_type",
+                ]
+                cols_art = [c for c in cols_art_pref if c in arts_ds.columns]
+                if not cols_art:
+                    cols_art = arts_ds.columns.tolist()
+
+                st.dataframe(
+                    arts_ds[cols_art],
+                    width="stretch",
+                    height=260,
+                    hide_index=True,
                 )
 
 
 # --------------------------------------------------
-# Cluster Visualization (UMAP / t-SNE / PCA / Dendrogram)
+# 4. Within a journal, which datasets are used most?
+#    (again, only research articles with identified datasets)
 # --------------------------------------------------
 
-if not datasets.empty:
-    st.markdown("## Cluster Visualization")
+st.markdown("## 4. Within a journal, which datasets are used most?")
 
-    df_feat, X = get_dataset_feature_matrix(datasets)
+if (
+    articles_research_linked.empty or
+    "journal" not in articles_research_linked.columns or
+    "icpsr_study_number" not in articles_research_linked.columns
+):
+    st.info(
+        "To explore dataset use within journals, the *linked* research-article data "
+        "must contain `journal` and `icpsr_study_number` columns."
+    )
+else:
+    usage_fd = articles_research_linked.dropna(
+        subset=["icpsr_study_number", "journal"]
+    ).copy()
 
-    if X is None or df_feat is None:
-        st.info("Not enough numeric features to build visualizations.")
+    if usage_fd.empty:
+        st.info(
+            "No linked research articles with both journal information and "
+            "`icpsr_study_number` were found."
+        )
     else:
-        viz_method = st.radio(
-            "Select embedding method",
-            ["t-SNE", "UMAP (if available)", "PCA (fallback)"],
-            index=0,
+        usage_fd["icpsr_study_number_str"] = usage_fd["icpsr_study_number"].astype(str)
+
+        fd_counts = (
+            usage_fd.groupby(["journal", "icpsr_study_number_str"])
+            .size()
+            .reset_index(name="n_articles")
         )
 
-        # 2D embedding 계산
-        embed_df = None
-        if viz_method == "UMAP (if available)":
-            if HAS_UMAP:
-                reducer = umap.UMAP(n_components=2, random_state=42)
-                emb = reducer.fit_transform(X)
-                embed_df = pd.DataFrame(emb, columns=["x", "y"], index=df_feat.index)
-            else:
-                st.warning("UMAP is not installed. Falling back to t-SNE.")
-                tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, max(5, X.shape[0] - 1)))
-                emb = tsne.fit_transform(X)
-                embed_df = pd.DataFrame(emb, columns=["x", "y"], index=df_feat.index)
+        journals = sorted(usage_fd["journal"].dropna().astype(str).unique())
 
-        elif viz_method == "t-SNE":
-            tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, max(5, X.shape[0] - 1)))
-            emb = tsne.fit_transform(X)
-            embed_df = pd.DataFrame(emb, columns=["x", "y"], index=df_feat.index)
+        sel_journal = st.selectbox(
+            "Select a journal to explore",
+            options=journals,
+        )
 
-        else:  # PCA
-            pca = PCA(n_components=2, random_state=42)
-            emb = pca.fit_transform(X)
-            embed_df = pd.DataFrame(emb, columns=["x", "y"], index=df_feat.index)
+        fd_sel = fd_counts[fd_counts["journal"] == sel_journal].copy()
 
-        # 플롯용 DataFrame 구성
-        if embed_df is not None:
-            plot_df = embed_df.copy()
-            plot_df["cluster"] = df_feat["cluster"] if "cluster" in df_feat.columns else -1
-            plot_df["icpsr_study_number"] = df_feat.get("icpsr_study_number", "")
+        if fd_sel.empty:
+            st.info(f"No dataset usage found for journal `{sel_journal}`.")
+        else:
+            journal_rows = usage_fd[usage_fd["journal"] == sel_journal].copy()
+            n_journal_articles = len(journal_rows)
 
-            st.markdown("### 2D Embedding of Datasets")
+            year_min_field = None
+            year_max_field = None
+            if "year" in journal_rows.columns:
+                years_num = pd.to_numeric(journal_rows["year"], errors="coerce")
+                if years_num.notna().any():
+                    year_min_field = int(years_num.min())
+                    year_max_field = int(years_num.max())
 
-            # Altair로 scatter plot
-            import altair as alt
-
-            chart = alt.Chart(plot_df.reset_index(drop=True)).mark_circle(size=60).encode(
-                x="x",
-                y="y",
-                color="cluster:N",
-                tooltip=["icpsr_study_number", "cluster"]
-            ).properties(
-                width="container",
-                height=400
+            top_n_field = st.slider(
+                "Top datasets for this journal",
+                5,
+                50,
+                15,
+                step=5,
+                key="top_n_journal_slider",
             )
 
-            st.altair_chart(chart, use_container_width=True)
+            # 상위 N개만 사용
+            fd_sel = fd_sel.sort_values("n_articles", ascending=False).head(top_n_field)
 
-        # Dendrogram (옵션)
-        st.markdown("### Dendrogram (Hierarchical Clustering)")
-        if not HAS_SCIPY:
-            st.info("SciPy is not installed. Dendrogram is unavailable in this environment.")
-        else:
-            try:
-                linked = linkage(X, method="average")
-                fig, ax = plt.subplots(figsize=(8, 4))
-                dendrogram(linked, labels=df_feat.get("icpsr_study_number", "").astype(str).values, leaf_rotation=90, ax=ax)
-                ax.set_ylabel("Distance")
-                st.pyplot(fig)
-            except Exception as e:
-                st.warning(f"Dendrogram plotting failed: {e}")
+            # --- 여기서부터: dataset 메타와 merge + fallback ---
+            fd_sel["icpsr_study_number_raw"] = fd_sel["icpsr_study_number_str"]
+
+            dsets_tmp = datasets.copy()
+            if not dsets_tmp.empty and "icpsr_study_number" in dsets_tmp.columns:
+                dsets_tmp["icpsr_study_number_str"] = dsets_tmp[
+                    "icpsr_study_number"
+                ].astype(str)
+            else:
+                dsets_tmp = pd.DataFrame(columns=["icpsr_study_number_str"])
+
+            fd_merged = fd_sel.merge(
+                dsets_tmp,
+                on="icpsr_study_number_str",
+                how="left",
+                suffixes=("", "_ds"),
+            )
+
+            # icpsr_study_number fallback: datasets에 없으면 raw 값 사용
+            if "icpsr_study_number" not in fd_merged.columns:
+                fd_merged["icpsr_study_number"] = fd_merged["icpsr_study_number_raw"]
+            else:
+                fd_merged["icpsr_study_number"] = fd_merged["icpsr_study_number"].fillna(
+                    fd_merged["icpsr_study_number_raw"]
+                )
+
+            # ICPSR Link도 없으면 study number로 만들어주기
+            if "ICPSR Link" not in fd_merged.columns:
+                fd_merged["ICPSR Link"] = ""
+            mask_need_link = fd_merged["ICPSR Link"].isna() | (
+                fd_merged["ICPSR Link"] == ""
+            )
+            mask_have_id = fd_merged["icpsr_study_number"].notna()
+            fd_merged.loc[mask_need_link & mask_have_id, "ICPSR Link"] = (
+                "https://www.icpsr.umich.edu/web/ICPSR/studies/"
+                + fd_merged.loc[mask_need_link & mask_have_id, "icpsr_study_number"].astype(str)
+            )
+
+            # ---- 표 뿌리기 ----
+            preferred_cols_fd = [
+                "journal",
+                "icpsr_study_number",
+                "title",
+                "n_articles",
+                "ICPSR Link",
+            ]
+            show_cols_fd = [c for c in preferred_cols_fd if c in fd_merged.columns]
+            if not show_cols_fd:
+                show_cols_fd = fd_merged.columns.tolist()
+
+            st.dataframe(
+                fd_merged[show_cols_fd],
+                width="stretch",
+                height=260,
+                hide_index=True,
+            )
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Research articles in this journal (linked)", int(n_journal_articles))
+            if year_min_field is not None and year_max_field is not None:
+                c2.metric("Earliest article year (journal)", year_min_field)
+                c3.metric("Latest article year (journal)", year_max_field)
+            else:
+                c2.metric("Earliest article year (journal)", "n/a")
+                c3.metric("Latest article year (journal)", "n/a")
+
+            # ---------- per-dataset detail within this journal ----------
+            st.markdown("### Dataset details within this journal")
+
+            ds_ids_journal = (
+                fd_merged["icpsr_study_number"]
+                .dropna()
+                .astype(str)
+                .unique()
+                .tolist()
+            )
+
+            if not ds_ids_journal:
+                st.info("No ICPSR study numbers found for this journal.")
+            else:
+                def _fmt_ds_j(sid_str: str) -> str:
+                    row_j = fd_merged[
+                        fd_merged["icpsr_study_number"].astype(str) == sid_str
+                    ].head(1)
+                    if row_j.empty:
+                        return sid_str
+                    title = str(row_j.iloc[0].get("title", "") or "")
+                    if len(title) > 80:
+                        title = title[:80] + "…"
+                    n_use = int(row_j.iloc[0].get("n_articles", 0))
+                    return f"{sid_str} · {title} (n={n_use})"
+
+                sel_ds_journal = st.selectbox(
+                    "Select a dataset in this journal",
+                    options=ds_ids_journal,
+                    format_func=_fmt_ds_j,
+                    key="sel_ds_journal",
+                )
+
+                # dataset metadata (global, from datasets)
+                ds_meta_global = datasets[
+                    datasets["icpsr_study_number"].astype(str) == sel_ds_journal
+                ].head(1)
+
+                if not ds_meta_global.empty:
+                    ds_row = ds_meta_global.iloc[0]
+                    st.markdown(
+                        f"**ICPSR study number:** {ds_row.get('icpsr_study_number')}"
+                    )
+                    st.markdown(f"**Title (global):** {ds_row.get('title','')}")
 
 
 # --------------------------------------------------
-# Article–Dataset Bipartite Graph
+# 5. Which journals reuse ICPSR datasets most?
+#    (journal-level summary, again only linked research articles)
 # --------------------------------------------------
 
-st.markdown("## Article–Dataset Bipartite Graph")
+st.markdown("## 5. Which journals reuse ICPSR datasets most?")
 
-with st.expander("Bipartite Graph Settings", expanded=False):
-    max_articles = st.slider("Max number of articles", 10, 500, 150, step=10)
-    max_datasets = st.slider("Max number of datasets", 10, 500, 150, step=10)
-
-G = build_bipartite_graph(articles, max_articles=max_articles, max_datasets=max_datasets)
-
-if G is None:
-    st.info("Not enough article–dataset links to build a bipartite graph.")
-else:
-    st.markdown(
-        "This graph shows articles (one partition) connected to ICPSR datasets (other partition)."
+if (
+    articles_research_linked.empty or
+    "journal" not in articles_research_linked.columns or
+    "icpsr_study_number" not in articles_research_linked.columns
+):
+    st.info(
+        "To build a journal-level summary, the linked research-article data "
+        "must contain `journal` and `icpsr_study_number` columns."
     )
-    render_pyvis_graph(G, height="600px")
+else:
+    jr = articles_research_linked.dropna(subset=["journal"]).copy()
+    if jr.empty:
+        st.info("No linked research articles with journal information were found.")
+    else:
+        jr["journal"] = jr["journal"].astype(str)
 
+        if "year" in jr.columns:
+            jr["year_num"] = pd.to_numeric(jr["year"], errors="coerce")
+        else:
+            jr["year_num"] = np.nan
+
+        grouped = jr.groupby("journal").agg(
+            n_articles=("journal", "size"),
+            n_datasets=("icpsr_study_number", lambda x: x.dropna().nunique()),
+            year_min=("year_num", "min"),
+            year_max=("year_num", "max"),
+        ).reset_index()
+
+        grouped["year_min"] = grouped["year_min"].fillna("").astype("Int64")
+        grouped["year_max"] = grouped["year_max"].fillna("").astype("Int64")
+
+        top_n_j = st.slider(
+            "Show top N journals by number of research articles using ICPSR datasets",
+            5,
+            50,
+            20,
+            step=5,
+        )
+
+        grouped = grouped.sort_values("n_articles", ascending=False).head(top_n_j)
+
+        grouped_display = grouped.copy()
+        grouped_display["Publication year range"] = grouped_display.apply(
+            lambda r: (
+                f"{int(r['year_min'])}–{int(r['year_max'])}"
+                if pd.notna(r["year_min"]) and pd.notna(r["year_max"])
+                else "n/a"
+            ),
+            axis=1,
+        )
+
+        show_cols_j = [
+            "journal",
+            "n_articles",
+            "n_datasets",
+            "Publication year range",
+        ]
+
+        st.dataframe(
+            grouped_display[show_cols_j],
+            width="stretch",
+            height=340,
+            hide_index=True,
+        )
 
 st.markdown("---")
 st.caption(
     "Tip: Re-run the pipeline if you change detection rules. "
-    "Article-level: `python scripts/pipeline.py` · "
+    "Article-level + dataset-level: `python scripts/pipeline_2.py` · "
     "Dataset-level only: `python scripts/dataset_summary_only.py`"
 )
