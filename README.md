@@ -10,14 +10,13 @@ This system automates the discovery and analysis of ICPSR dataset citations thro
 - **Actual dataset-to-article mapping** via OpenAlex metadata
 - **Full-text analysis** for contextual ICPSR mentions  
 - **Reference-based linking** to study numbers and DOIs
-- **Dataset-level aggregation** for reuse statistics
 - **Interactive Streamlit dashboard** for exploration and discovery
 
 Designed for bibliometrics researchers, data scientists, and science-of-science professionals.
 
 ---
 
-## 1️⃣ System Architecture & Data Flow
+## 1. System Architecture & Data Flow
 
 ### 1.1 — Article Retrieval & Metadata Enrichment
 
@@ -127,7 +126,7 @@ Grouped analysis at dataset level (`icpsr_study_number`):
 
 ---
 
-## 2️⃣ Interactive Dashboard
+## 2. Interactive Dashboard
 
 Located in: `app/streamlit_app.py`
 
@@ -198,18 +197,18 @@ Dataset reuse breakdown by journal.
 Top journals by ICPSR engagement.
 
 **Ranking dimensions:**
-- # of ICPSR-citing research articles
-- # of unique datasets reused
+- of ICPSR-citing research articles
+- of unique datasets reused
 - Activity timespan
 
 ---
 
-## 3️⃣ Artifacts & Data Files
+## 3. Artifacts & Data Files
 
 | File | Purpose | GitHub | Notes |
 |------|---------|--------|-------|
 | `outputs/articles.csv` | Raw OpenAlex retrieval | ❌ | File size limit |
-| `outputs/articles_with_detection.csv` | Articles + full-text + detection | ❌ | Generated on-demand |
+| `ouputs/articles_with_detection.csv` | Articles + full-text + detection | ❌ | Generated on-demand |
 | `outputs/icpsr_articles_detected.csv` | Clean article-level results | ✅ | Curated output |
 | `outputs/icpsr_datasets_detected.csv` | Dataset aggregation | ✅ | Curated output |
 | `icpsr_openalex_map.csv` | ICPSR–OpenAlex DOI mapping | ✅ | Reference dataset |
@@ -226,7 +225,7 @@ python scripts/dataset_summary_only.py
 
 ---
 
-## 4️⃣ Getting Started
+## 4. Getting Started
 
 ### Prerequisites
 
@@ -256,9 +255,3 @@ streamlit run app/streamlit_app.py
 Dashboard accessible at `http://localhost:8501`
 
 ---
-
-## 📝 License & Citation
-
-This project is open source. Please cite appropriately in your work.
-
-For questions or contributions, please open an issue or pull request.
