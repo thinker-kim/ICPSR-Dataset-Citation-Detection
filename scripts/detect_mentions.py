@@ -52,8 +52,8 @@ NEGATIVE_PATTERNS = [
 # ---------------------------------------------------------------
 WEIGHTS = {
     "doi": 3,
-    "verb_context": 2,
-    "study": 1,
+    "verb_context": 3,
+    "study": 3,
     "keyword_only": 1,
 }
 
