@@ -176,8 +176,8 @@ Dataset reuse breakdown by journal.
 Top journals by ICPSR engagement.
 
 **Ranking dimensions:**
-- # of ICPSR-citing research articles
-- # of unique datasets reused
+- of ICPSR-citing research articles
+- of unique datasets reused
 - Activity timespan
 
 ---
