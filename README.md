@@ -23,15 +23,25 @@ Designed for bibliometrics researchers, data scientists, and science-of-science 
 ```mermaid
 flowchart TD
 
-PIPE[pipeline.py<br>(Orchestrates Entire Workflow)]
+    PIPE[pipeline.py (Main Orchestrator)]
 
-A[Article Retrieval<br>(OpenAlex API)] --> PIPE
-PIPE --> B[Full-Text / Abstract Acquisition]
-PIPE --> C[ICPSR Detection Engine<br>- Text-based<br>- Reference-based]
-PIPE --> D[Article Classification<br>(3 labels)]
-PIPE --> E[Dataset Aggregation]
-PIPE --> F[Interactive Dashboard<br>(Streamlit)]
+    A[Article Retrieval\n(OpenAlex API)]
+    B[Full-Text or Abstract Acquisition]
+    C[ICPSR Detection Engine\n(Text-based + Reference-based)]
+    D[Article Classification\n(3 labels)]
+    E[Dataset Aggregation]
+    F[Interactive Dashboard\n(Streamlit)]
 
+    %% Functional flow
+    A --> B --> C --> D --> E --> F
+
+    %% pipeline role
+    PIPE --> A
+    PIPE --> B
+    PIPE --> C
+    PIPE --> D
+    PIPE --> E
+    PIPE --> F
 ---
 
 ### 1.1 — Article Retrieval & Metadata Enrichment
