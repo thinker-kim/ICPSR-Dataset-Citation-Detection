@@ -104,13 +104,28 @@ Semantic categorization into three labels:
 
 | Category | Definition |
 |----------|-----------|
-| `research_article_using_icpsr` | Genuine research using/citing ICPSR data |
-| `icpsr_data_doc` | ICPSR documentation, landing pages, project descriptions |
-| `not_icpsr_related` | No meaningful ICPSR connection |
+| `research_article_using_icpsr` | A scholarly article that uses or cites ICPSR datasets, identified via full-text ICPSR detection and/or references to ICPSR-mapped work IDs. |
+| `icpsr_data_doc` | ICPSR dataset documents such as dataset landing pages, codebooks, and project documentation. |
+| `not_icpsr_related` | No meaningful ICPSR connection. |
 
-**Classifier logic:** text detection + reference matching + DOI/venue heuristics
+**Classifier logic:**  
+1. **Identify ICPSR dataset/documents first (priority rule).**  
+   A record is labeled `icpsr_data_doc` if any of the following conditions hold:  
+   - DOI begins with `10.3886/`  
+   - OpenAlex `work_id` is in `ICPSR_WORK_ID_SET`  
+   - Venue/source metadata indicates an ICPSR landing page, codebook, or project document  
+   These records are **not evaluated for text-based ICPSR usage**, since dataset documents inherently contain ICPSR study identifiers.
+
+2. **Only non-dataset records are evaluated as potential research articles.**  
+   A record is labeled `research_article_using_icpsr` if either condition is true:  
+   - Full-text contains ICPSR study numbers, ICPSR DOIs, or explicit mentions of using ICPSR data  
+   - The reference list cites an ICPSR dataset (i.e., any referenced `work_id` matches `ICPSR_WORK_ID_SET`)  
+   Records classified as datasets/documents in Step 1 are **never** labeled as research articles.
+
+3. **All remaining records are labeled `not_icpsr_related`.**
 
 **Output:** `outputs/icpsr_articles_detected.csv`
+
 
 ---
 
