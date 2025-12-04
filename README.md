@@ -61,8 +61,8 @@ Multi-signal approach that scans full text or abstract sentence-by-sentence:
 | Signal | Pattern Examples | Weight | Rationale |
 |--------|-----------------|--------|-----------|
 | DOI Pattern | `10.3886/ICPSR8079`, `10.3886/ICPSR8079.v1` | 3 | Explicit identifier |
-| Study Number | `ICPSR 8079`, `ICPSR Study No. 8079`, `ICPSR #8079` | 1 | Numbered reference |
-| Verb Context | "data used from ICPSR", "data retrieved from ICPSR", "data downloaded from ICPSR" | 2 | Active data reuse |
+| Study Number | `ICPSR 8079`, `ICPSR Study No. 8079`, `ICPSR #8079` | 3 | Numbered reference |
+| Verb Context | "data used from ICPSR", "data retrieved from ICPSR", "data downloaded from ICPSR" | 3 | Active data reuse |
 | Keyword Only | Standalone mention of "ICPSR" | 1 | Weakest signal |
 
 **Negative Context Filter:**  
