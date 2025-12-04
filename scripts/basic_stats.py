@@ -1,138 +1,92 @@
-# scripts/basic_stats.py
-
 import pandas as pd
 from pathlib import Path
+import sys
+from io import StringIO
 
+# --------------------------------------------------
+# Setup paths
+# --------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "outputs"
 
+ARTICLES = OUT / "articles.csv"
+ARTICLES_WITH_DET = OUT / "articles_with_detection.csv"
+ICPSR_DETECTED = OUT / "icpsr_articles_detected.csv"
+DATASETS_DETECTED = OUT / "icpsr_datasets_detected.csv"
 
-def safe_read(path):
-    """Read CSV if the file exists; return None otherwise."""
-    if path.exists():
-        try:
-            return pd.read_csv(path)
-        except Exception:
-            return None
-    return None
+# --------------------------------------------------
+# Capture output (console + save to file)
+# --------------------------------------------------
+output_buffer = StringIO()
 
+def log(msg=""):
+    print(msg)
+    output_buffer.write(msg + "\n")
 
-def describe(df, name):
-    """Return basic info of a DataFrame."""
-    if df is None:
-        return f"- {name}: file not found\n"
-    return f"- {name}: {len(df):,} rows, {len(df.columns)} columns\n"
+log("========== BASIC PIPELINE STATS ==========\n")
 
+# --------------------------------------------------
+# [1] OpenAlex article counts
+# --------------------------------------------------
+df_articles = pd.read_csv(ARTICLES)
+log("[1] OpenAlex search results")
+log(f"  - Total articles collected: {len(df_articles)}\n")
 
-def compute_basic_stats():
+# --------------------------------------------------
+# [2] Corpus with detection fields
+# --------------------------------------------------
+df_det = pd.read_csv(ARTICLES_WITH_DET)
+log("[2] Corpus with ICPSR detection fields")
+log(f"  - Rows: {len(df_det)}")
+log(f"  - Articles with ICPSR signal: {df_det['has_icpsr'].sum()}\n")
 
-    # === 1. Load files ===
-    articles = safe_read(OUT / "articles.csv")
-    articles_det = safe_read(OUT / "articles_with_detection.csv")
-    icpsr_articles = safe_read(OUT / "icpsr_articles_detected.csv")
-    icpsr_datasets = safe_read(OUT / "icpsr_datasets_detected.csv")
-    icpsr_map = safe_read(OUT / "icpsr_openalex_map.csv")
+# --------------------------------------------------
+# [3] ICPSR-related articles
+# --------------------------------------------------
+df_icpsr = pd.read_csv(ICPSR_DETECTED)
 
-    # === 2. File overview section ===
-    report = []
-    report.append("# Basic Statistics for ICPSR Dataset Citation Detector\n\n")
+log("[3] ICPSR-related articles")
+log(f"  - Total ICPSR-related articles: {len(df_icpsr)}")
 
-    report.append("## 1. Loaded files overview\n")
-    report.append(describe(articles, "articles.csv (raw OpenAlex works)"))
-    report.append(describe(articles_det, "articles_with_detection.csv (with detection scores)"))
-    report.append(describe(icpsr_articles, "icpsr_articles_detected.csv (ICPSR-related mentions)"))
-    report.append(describe(icpsr_datasets, "icpsr_datasets_detected.csv (detected dataset mentions)"))
-    report.append(describe(icpsr_map, "icpsr_openalex_map.csv (DOI → OpenAlex mapping)"))
-    report.append("\n")
+# Detect column name
+label_col = None
+for c in ["icpsr_work_category", "work_type"]:
+    if c in df_icpsr.columns:
+        label_col = c
 
-    # === 3. Filter research articles that truly reused ICPSR datasets ===
-    linked_research = None
-    if icpsr_articles is not None:
-        # (1) Use only rows with detection_score > 0 (text-based signal)
-        df = icpsr_articles[icpsr_articles["detection_score"] > 0].copy()
+if label_col is None:
+    log("  - Work-type column missing (skipping)")
+else:
+    n_research = (df_icpsr[label_col] == "research_article_using_icpsr").sum()
+    n_docs = (df_icpsr[label_col] == "icpsr_data_doc").sum()
+    n_other = len(df_icpsr) - n_research - n_docs
 
-        # (2) Check if article ID appears in the ICPSR–OpenAlex dataset map
-        if icpsr_map is not None and "openalex_work_id" in icpsr_map.columns:
-            icpsr_ids = set(icpsr_map["openalex_work_id"].dropna().astype(str))
-            df["is_linked"] = df["id"].astype(str).isin(icpsr_ids)
-            linked_research = df[df["is_linked"]]
-        else:
-            linked_research = df
+    log(f"  - Research articles: {n_research}")
+    log(f"  - ICPSR data/docs: {n_docs}")
+    log(f"  - Other/missing: {n_other}")
 
-    # === 4. Summary statistics ===
-    report.append("## 2. Summary statistics\n")
+# Study number count
+if "icpsr_study_number" in df_det.columns:
+    log(f"  - With study number (any type): {df_det['icpsr_study_number'].notna().sum()}")
 
-    # Total articles loaded from OpenAlex
-    if articles is not None:
-        total_articles = len(articles)
-        report.append(f"- Total OpenAlex articles loaded: **{total_articles:,}**\n")
+# Research articles w/ dataset link
+if label_col and "icpsr_study_number" in df_icpsr.columns:
+    df_research = df_icpsr[df_icpsr[label_col] == "research_article_using_icpsr"]
+    linked = df_research["icpsr_study_number"].notna().sum()
+    log(f"  - Research articles w/ dataset link: {linked}")
 
-    # ICPSR-related mentions
-    if icpsr_articles is not None:
-        report.append(
-            f"- Articles with ICPSR-related detected text: **{len(icpsr_articles):,}**\n"
-        )
+# Distinct datasets
+if DATASETS_DETECTED.exists():
+    df_ds = pd.read_csv(DATASETS_DETECTED)
+    log(f"  - Distinct datasets reused: {len(df_ds)}")
+else:
+    log("  - Dataset summary file missing")
 
-    # Confirmed research using mapped ICPSR datasets
-    if linked_research is not None:
-        report.append(
-            f"- Confirmed research articles that use mapped ICPSR datasets: **{len(linked_research):,}**\n"
-        )
+# --------------------------------------------------
+# Save output to file
+# --------------------------------------------------
+out_path = OUT / "basic_pipeline_stats.txt"
+with open(out_path, "w") as f:
+    f.write(output_buffer.getvalue())
 
-        # Publication year range
-        if "year" in linked_research.columns and linked_research["year"].notna().any():
-            y_min = int(linked_research["year"].min())
-            y_max = int(linked_research["year"].max())
-            report.append(f"- Publication year range: **{y_min}–{y_max}**\n")
-
-    # Number of distinct detected datasets
-    if icpsr_datasets is not None:
-        n_studies = icpsr_datasets["icpsr_study_number"].nunique()
-        report.append(f"- Number of distinct ICPSR datasets detected: **{n_studies:,}**\n")
-
-    report.append("\n")
-
-    # === 5. Most frequently reused ICPSR datasets ===
-    if linked_research is not None:
-        report.append("## 3. Most frequently reused ICPSR datasets\n")
-
-        if "icpsr_study_number" in linked_research.columns:
-            ds_counts = (
-                linked_research["icpsr_study_number"]
-                .dropna()
-                .value_counts()
-                .head(20)
-            )
-            if len(ds_counts) > 0:
-                report.append("Top datasets:\n")
-                for sn, cnt in ds_counts.items():
-                    report.append(f"- Study {sn}: reused in {cnt} articles\n")
-            else:
-                report.append("No datasets were linked to research articles.\n")
-        else:
-            report.append("Column 'icpsr_study_number' not found.\n")
-
-        report.append("\n")
-
-    # === 6. Journals that reuse ICPSR data most frequently ===
-    if linked_research is not None and "journal" in linked_research.columns:
-        report.append("## 4. Journals that reuse ICPSR data the most\n")
-
-        j_counts = linked_research["journal"].value_counts().head(20)
-
-        for j, cnt in j_counts.items():
-            report.append(f"- {j}: {cnt} research articles\n")
-
-        report.append("\n")
-
-    # === 7. Save output ===
-    OUT_FILE = OUT / "basic_stats.md"
-    with open(OUT_FILE, "w", encoding="utf-8") as f:
-        f.writelines(report)
-
-    print("=== Basic statistics generated successfully ===")
-    print(f"Saved to → {OUT_FILE}")
-
-
-if __name__ == "__main__":
-    compute_basic_stats()
+log(f"\n Saved summary to: {out_path}")
