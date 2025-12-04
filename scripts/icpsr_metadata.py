@@ -11,11 +11,11 @@ HEADERS = {"User-Agent": USER_AGENT}
 
 def _extract_doi_from_text(text: str) -> Optional[str]:
     """
-    Try to extract a DOI from raw HTML text using a regex.
-    This is heuristic but should catch most '10.xxxx/...' patterns.
+    Attempt to extract a DOI from raw HTML text using a regex.
+    This is heuristic but should detect most typical '10.xxxx/...' patterns.
     """
-    # DOI 패턴 (대충 CrossRef에서 권장하는 형태 기반)
-    m = re.search(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", text, re.IGNORECASE)
+    # DOI pattern based loosely on CrossRef recommendations
+    m = re.search(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", text, flags=re.IGNORECASE)
     if m:
         return m.group(0)
     return None
@@ -23,10 +23,13 @@ def _extract_doi_from_text(text: str) -> Optional[str]:
 
 def fetch_icpsr_metadata(icpsr_id: str) -> Optional[Dict]:
     """
-    Scrape minimal metadata from ICPSR study page.
-    Example: https://www.icpsr.umich.edu/web/ICPSR/studies/8079
+    Scrape minimal metadata from an ICPSR study page.
+
+    Example:
+        https://www.icpsr.umich.edu/web/ICPSR/studies/8079
     """
     url = f"https://www.icpsr.umich.edu/web/ICPSR/studies/{icpsr_id}"
+
     try:
         resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
         if resp.status_code != 200:
@@ -48,24 +51,24 @@ def fetch_icpsr_metadata(icpsr_id: str) -> Optional[Dict]:
 
         # ---- Description ----
         desc = None
-        for sel in [
+        for selector in [
             "#study-description",
             ".description",
             "section#description",
             "section#abstract",
             "div.abstract",
         ]:
-            node = soup.select_one(sel)
+            node = soup.select_one(selector)
             if node:
                 desc = node.get_text(" ", strip=True)
                 break
 
         # ---- Creators (very heuristic) ----
         creators = []
-        for lab in soup.find_all(["a", "span"]):
-            t = lab.get_text(" ", strip=True)
-            if t and any(k in t.lower() for k in ["principal investigator", "investigator"]):
-                creators.append(t)
+        for el in soup.find_all(["a", "span"]):
+            text = el.get_text(" ", strip=True)
+            if text and any(key in text.lower() for key in ["principal investigator", "investigator"]):
+                creators.append(text)
 
         # ---- DOI (regex on raw HTML) ----
         doi = _extract_doi_from_text(html)
@@ -77,7 +80,8 @@ def fetch_icpsr_metadata(icpsr_id: str) -> Optional[Dict]:
             "creators": "; ".join(sorted(set(creators))) if creators else None,
             "subjects": "; ".join(sorted(set(subjects))) if subjects else None,
             "description": desc,
-            "doi": doi,  # 🔹 새로 추가된 필드
+            "doi": doi,
         }
+
     except Exception:
         return None
