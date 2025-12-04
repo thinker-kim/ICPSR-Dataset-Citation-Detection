@@ -20,26 +20,21 @@ Designed for bibliometrics researchers, data scientists, and science-of-science 
 
 ### High-Level System Overview
 
-```mermaid
 flowchart TD
-
-    PIPE["pipeline.py (Main Orchestrator)"]
-
-    A["Article Retrieval (OpenAlex API)"]
-    B["Full-Text or Abstract Acquisition"]
-    C["ICPSR Detection Engine (Text-based + Reference-based)"]
-    D["Article Classification (3 labels)"]
+    PIPE["pipeline.py<br/>Main Orchestrator"]
+    A["Article Retrieval<br/>OpenAlex API"]
+    B["Full-Text or Abstract<br/>Acquisition"]
+    C["ICPSR Detection Engine<br/>Text-based + Reference-based"]
+    D["Article Classification<br/>3 labels"]
     E["Dataset Aggregation"]
-    F["Interactive Dashboard (Streamlit)"]
-
-    A --> B --> C --> D --> E --> F
-
+    F["Interactive Dashboard<br/>Streamlit"]
+    
     PIPE --> A
-    PIPE --> B
-    PIPE --> C
-    PIPE --> D
-    PIPE --> E
-    PIPE --> F
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
 
 ---
 
