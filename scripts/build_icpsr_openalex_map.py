@@ -9,23 +9,24 @@ from config_local import USER_AGENT
 
 API_URL = "https://api.openalex.org/works"
 
-# 프로젝트 루트 (…/ICPSR-Dataset-Citation-Detection)
+# Project root (.../ICPSR-Dataset-Citation-Detection)
 ROOT = Path(__file__).resolve().parents[1]
 
-# 입력: outputs/icpsr_datasets_detected.csv
+# Input: outputs/icpsr_datasets_detected.csv
 INPUT_PATH = ROOT / "outputs" / "icpsr_datasets_detected.csv"
 
-# 출력: 루트에 icpsr_openalex_map.csv (pipeline.py에서 이렇게 찾고 있음)
+# Output mapping file
 OUT_PATH = ROOT / "outputs" / "icpsr_openalex_map.csv"
 
 
 def clean_doi(raw: str) -> str:
     """
-    doi 열이 'https://doi.org/10.3886/icpsr00002'처럼 되어 있으니
-    앞부분을 잘라내고 실제 DOI만 반환.
+    Normalize DOI by removing prefixes such as:
+    https://doi.org/10.3886/icpsr00002 → 10.3886/icpsr00002
     """
     if not isinstance(raw, str):
         return None
+
     doi = raw.strip()
     doi_lower = doi.lower()
 
@@ -38,13 +39,14 @@ def clean_doi(raw: str) -> str:
     for p in prefixes:
         if doi_lower.startswith(p):
             return doi[len(p):]
-    return doi  # 이미 DOI만 있는 경우
+
+    return doi  # Already clean
 
 
 def get_openalex_id_for_doi(doi: str):
     """
-    OpenAlex에서 DOI로 work_id를 조회.
-    못 찾으면 None 반환.
+    Query OpenAlex to retrieve the work_id for a given DOI.
+    Returns None if not found.
     """
     params = {
         "filter": f"doi:{doi}",
@@ -62,7 +64,7 @@ def get_openalex_id_for_doi(doi: str):
 
     results = data.get("results", [])
     if not results:
-        print(f"[WARN] No OpenAlex match for DOI={doi}")
+        print(f"[WARN] No OpenAlex match found for DOI={doi}")
         return None
 
     return results[0].get("id")
@@ -70,15 +72,15 @@ def get_openalex_id_for_doi(doi: str):
 
 def main():
     print("=== Building ICPSR DOI → OpenAlex ID mapping table ===")
-    print(f"[INFO] Reading ICPSR datasets from: {INPUT_PATH}")
+    print(f"[INFO] Reading ICPSR dataset list from: {INPUT_PATH}")
 
     df_src = pd.read_csv(INPUT_PATH)
 
-    # 필요한 열: icpsr_study_number, doi, title
+    # Required columns
     required_cols = {"icpsr_study_number", "doi"}
     missing = required_cols - set(df_src.columns)
     if missing:
-        raise ValueError(f"입력 파일에 다음 열이 없음: {missing}")
+        raise ValueError(f"Required columns missing from input file: {missing}")
 
     rows = []
 
@@ -88,7 +90,7 @@ def main():
 
         doi = clean_doi(raw_doi)
         if not doi:
-            print(f"[WARN] No valid DOI for ICPSR {icpsr_id}; skipping.")
+            print(f"[WARN] Missing or invalid DOI for ICPSR {icpsr_id}; skipping.")
             continue
 
         title = row.get("title")
@@ -105,11 +107,12 @@ def main():
             }
         )
 
-        # OpenAlex API 너무 두들기지 않도록 살짝 쉬어주기
+        # Prevent excessive OpenAlex API load
         time.sleep(0.5)
 
     df_out = pd.DataFrame(rows)
     df_out.to_csv(OUT_PATH, index=False)
+
     print(f"[DONE] Saved mapping file to {OUT_PATH}")
     if not df_out.empty:
         print(df_out.head())
