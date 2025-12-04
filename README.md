@@ -18,6 +18,32 @@ Designed for bibliometrics researchers, data scientists, and science-of-science 
 
 ## 1. System Architecture & Data Flow
 
+### High-Level System Overview
+
+```mermaid
+flowchart TD
+
+    %% Central orchestrator
+    PIPE[pipeline.py<br><b>Main Orchestrator</b>]
+
+    %% Modules
+    A[search_articles.py<br>(Article Retrieval)]
+    B[fetch_fulltext.py<br>(Full-text / Abstract)]
+    C[detect_mentions.py<br>(ICPSR Detection)]
+    D[Classification<br>(3 labels)]
+    E[dataset_summary_only.py<br>(Dataset Aggregation)]
+    F[streamlit_app.py<br>(Interactive Dashboard)]
+
+    %% Flows
+    PIPE --> A
+    PIPE --> B
+    PIPE --> C
+    PIPE --> D
+    PIPE --> E
+    PIPE --> F
+
+---
+
 ### 1.1 — Article Retrieval & Metadata Enrichment
 
 The pipeline queries **OpenAlex API** to retrieve research articles with essential metadata:
