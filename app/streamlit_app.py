@@ -45,7 +45,7 @@ if not articles_fp.exists():
     st.warning(
         "No article-level outputs found.\n\n"
         "Run the pipeline first, e.g.:\n"
-        "`python scripts/pipeline_2.py`"
+        "`python scripts/pipeline.py`"
     )
     st.stop()
 
@@ -883,6 +883,6 @@ else:
 st.markdown("---")
 st.caption(
     "Tip: Re-run the pipeline if you change detection rules. "
-    "Article-level + dataset-level: `python scripts/pipeline_2.py` · "
+    "Article-level + dataset-level: `python scripts/pipeline.py` · "
     "Dataset-level only: `python scripts/dataset_summary_only.py`"
 )
