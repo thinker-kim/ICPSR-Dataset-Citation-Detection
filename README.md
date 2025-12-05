@@ -91,8 +91,7 @@ Designed for bibliometrics researchers, data scientists, and science-of-science 
 ### 1.1 — Article Retrieval & Metadata Enrichment
 
 The pipeline queries the OpenAlex API to retrieve research articles with essential metadata.  
-See the official documentation for details:  
-[OpenAlex API](https://docs.openalex.org/how-to-use-the-api/api-overview).
+See the official documentation for details: [OpenAlex API](https://docs.openalex.org/how-to-use-the-api/api-overview).
 
 | Field | Description |
 |-------|-------------|
