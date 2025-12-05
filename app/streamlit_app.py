@@ -187,52 +187,86 @@ def filter_articles(
 
     return f
 
-
 # --------------------------------------------------
 # 1. Overview – ICPSR dataset reuse at a glance
 # --------------------------------------------------
 
-st.markdown("## Overview – ICPSR dataset reuse at a glance")
+st.markdown("## 1. Overview – ICPSR dataset reuse at a glance")
 
-# Metrics are based on *research articles that have an identified ICPSR dataset*
-n_research_linked = len(articles_research_linked)
-n_research_mentions = len(articles_research)  # all research articles with ICPSR mention
+# =========================
+# 1.1 Overall corpus (all ICPSR-related works with identified dataset)
+# =========================
+st.markdown("### 1.1 Overall corpus (all ICPSR-related works)")
 
-n_journals_linked = (
-    int(articles_research_linked["journal"].nunique())
-    if "journal" in articles_research_linked.columns and not articles_research_linked.empty
-    else None
-)
-n_datasets_linked = (
-    int(articles_research_linked["icpsr_study_number"].dropna().nunique())
-    if "icpsr_study_number" in articles_research_linked.columns and not articles_research_linked.empty
-    else None
-)
+# 먼저 "identified dataset"이 있는 것만 서브셋으로 잡기
+if "has_dataset_link" in articles.columns:
+    articles_identified = articles[articles["has_dataset_link"] == True].copy()
+else:
+    articles_identified = articles.iloc[0:0].copy()  # empty frame
+
+# 1) Works with identified dataset (ANY type)
+n_identified = len(articles_identified)
+
+# 2) Research articles using ICPSR (identified dataset 보유한 연구논문만)
+if "icpsr_work_category" in articles_identified.columns:
+    n_research_identified = int(
+        (articles_identified["icpsr_work_category"] == "research_article_using_icpsr").sum()
+    )
+else:
+    n_research_identified = 0
+
+# 3) ICPSR data / project documents (identified dataset 보유한 문서만)
+if "icpsr_work_category" in articles_identified.columns:
+    n_docs_identified = int(
+        (articles_identified["icpsr_work_category"] == "icpsr_data_doc").sum()
+    )
+else:
+    n_docs_identified = 0
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Works with identified dataset", n_identified)
+col2.metric("Research articles using ICPSR", n_research_identified)
+col3.metric("ICPSR data / project documents", n_docs_identified)
+
+# =========================
+# 1.2 Research articles with resolved ICPSR datasets
+# =========================
+st.markdown("### 1.2 Research articles with resolved ICPSR datasets")
+
+linked = articles_research_linked.copy()  # 이미 has_dataset_link + research 로 필터된 상태라면 84개일 것
+
+n_research_linked = len(linked)
+
+if not linked.empty and "journal" in linked.columns:
+    n_journals_linked = int(linked["journal"].nunique())
+else:
+    n_journals_linked = 0
+
+if not linked.empty and "icpsr_study_number" in linked.columns:
+    n_datasets_linked = int(linked["icpsr_study_number"].dropna().nunique())
+else:
+    n_datasets_linked = 0
+
+if not linked.empty and "year" in linked.columns:
+    years_num = pd.to_numeric(linked["year"], errors="coerce")
+    if years_num.notna().any():
+        RESEARCH_YEAR_MIN = int(years_num.min())
+        RESEARCH_YEAR_MAX = int(years_num.max())
+    else:
+        RESEARCH_YEAR_MIN = None
+        RESEARCH_YEAR_MAX = None
+else:
+    RESEARCH_YEAR_MIN = None
+    RESEARCH_YEAR_MAX = None
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Research articles with identified ICPSR dataset", n_research_linked)
-if n_journals_linked is not None:
-    col2.metric("Journals with ICPSR dataset reuse", n_journals_linked)
-if n_datasets_linked is not None:
-    col3.metric("Distinct ICPSR datasets reused", n_datasets_linked)
+col2.metric("Journals with ICPSR dataset reuse", n_journals_linked)
+col3.metric("Distinct ICPSR datasets reused", n_datasets_linked)
 if RESEARCH_YEAR_MIN is not None and RESEARCH_YEAR_MAX is not None:
     col4.metric("Publication year range", f"{RESEARCH_YEAR_MIN}–{RESEARCH_YEAR_MAX}")
 else:
     col4.metric("Publication year range", "n/a")
-
-total_docs = len(articles_docs)
-n_research_unlinked = max(n_research_mentions - n_research_linked, 0)
-
-st.markdown(
-    f"""
-All metrics above refer to **research articles where a specific ICPSR dataset is identified**
-(via `icpsr_study_number`), not just general mentions of ICPSR.
-
-- Research articles with any ICPSR mention: **{n_research_mentions}**  
-- …of which, with a resolved ICPSR dataset: **{n_research_linked}**  
-- ICPSR data / project documentation pages: **{total_docs}**
-    """
-)
 
 st.markdown("---")
 
@@ -240,15 +274,20 @@ st.markdown("---")
 # 2. Article browser – explore individual papers
 # --------------------------------------------------
 
-st.markdown("## Article browser – explore individual papers")
+st.markdown("## 2. Article browser – explore individual papers")
 
 with st.expander("Search / filter options", expanded=True):
-    q = st.text_input("Filter by title / DOI / author / journal", "")
+    # 🔹 검색 대상 라벨 변경: title / ICPSR study number / journal
+    q = st.text_input("Filter by title / ICPSR study number / journal", "")
 
+    # 🔹 라벨/도움말 문구 수정 (Only 제거 + 뉘앙스 명확화)
     only_hits = st.checkbox(
-        "Show only articles with ICPSR mentions",
+        "Articles with ICPSR mentions (text-based detection)",
         value=True,
-        help="If checked, keep only rows where text-based detection (has_icpsr) is True.",
+        help=(
+            "If checked, keep only rows where text-based detection (has_icpsr) is True, "
+            "regardless of whether a specific ICPSR study number or DOI is resolved."
+        ),
     )
 
     only_linked = st.checkbox(
@@ -262,7 +301,7 @@ with st.expander("Search / filter options", expanded=True):
         options=[
             "All ICPSR-related works",
             "Research articles using ICPSR datasets",
-            "ICPSR data / project docs",
+            "ICPSR data / project documents",
         ],
         index=1,
         horizontal=True,
@@ -353,7 +392,9 @@ if filtered_hits is not None:
 if filtered_linked is not None:
     c7.metric("With identified dataset (current filters)", filtered_linked)
 if filtered_data_docs is not None:
-    c8.metric("Data / project docs (current filters)", filtered_data_docs)
+    c8.metric("ICPSR data / project documents (current filters)",
+        filtered_data_docs,
+        )
 
 # ----- table + details -----
 
@@ -593,11 +634,10 @@ else:
 
 
 # --------------------------------------------------
-# 4. Within a journal, which datasets are used most?
-#    (again, only research articles with identified datasets)
+# 4. Journal-level analysis of ICPSR dataset reuse
 # --------------------------------------------------
 
-st.markdown("## 4. Within a journal, which datasets are used most?")
+st.markdown("## 4. Journal-level analysis of ICPSR dataset reuse")
 
 if (
     articles_research_linked.empty or
@@ -605,192 +645,15 @@ if (
     "icpsr_study_number" not in articles_research_linked.columns
 ):
     st.info(
-        "To explore dataset use within journals, the *linked* research-article data "
+        "To build journal-level views, the linked research-article data "
         "must contain `journal` and `icpsr_study_number` columns."
     )
 else:
-    usage_fd = articles_research_linked.dropna(
-        subset=["icpsr_study_number", "journal"]
-    ).copy()
+    # -------------------------------
+    # 4.1 Which journals reuse ICPSR datasets most?
+    # -------------------------------
+    st.markdown("### 4.1 Which journals reuse ICPSR datasets most?")
 
-    if usage_fd.empty:
-        st.info(
-            "No linked research articles with both journal information and "
-            "`icpsr_study_number` were found."
-        )
-    else:
-        usage_fd["icpsr_study_number_str"] = usage_fd["icpsr_study_number"].astype(str)
-
-        fd_counts = (
-            usage_fd.groupby(["journal", "icpsr_study_number_str"])
-            .size()
-            .reset_index(name="n_articles")
-        )
-
-        journals = sorted(usage_fd["journal"].dropna().astype(str).unique())
-
-        sel_journal = st.selectbox(
-            "Select a journal to explore",
-            options=journals,
-        )
-
-        fd_sel = fd_counts[fd_counts["journal"] == sel_journal].copy()
-
-        if fd_sel.empty:
-            st.info(f"No dataset usage found for journal `{sel_journal}`.")
-        else:
-            journal_rows = usage_fd[usage_fd["journal"] == sel_journal].copy()
-            n_journal_articles = len(journal_rows)
-
-            year_min_field = None
-            year_max_field = None
-            if "year" in journal_rows.columns:
-                years_num = pd.to_numeric(journal_rows["year"], errors="coerce")
-                if years_num.notna().any():
-                    year_min_field = int(years_num.min())
-                    year_max_field = int(years_num.max())
-
-            top_n_field = st.slider(
-                "Top datasets for this journal",
-                5,
-                50,
-                15,
-                step=5,
-                key="top_n_journal_slider",
-            )
-
-            # 상위 N개만 사용
-            fd_sel = fd_sel.sort_values("n_articles", ascending=False).head(top_n_field)
-
-            # --- 여기서부터: dataset 메타와 merge + fallback ---
-            fd_sel["icpsr_study_number_raw"] = fd_sel["icpsr_study_number_str"]
-
-            dsets_tmp = datasets.copy()
-            if not dsets_tmp.empty and "icpsr_study_number" in dsets_tmp.columns:
-                dsets_tmp["icpsr_study_number_str"] = dsets_tmp[
-                    "icpsr_study_number"
-                ].astype(str)
-            else:
-                dsets_tmp = pd.DataFrame(columns=["icpsr_study_number_str"])
-
-            fd_merged = fd_sel.merge(
-                dsets_tmp,
-                on="icpsr_study_number_str",
-                how="left",
-                suffixes=("", "_ds"),
-            )
-
-            # icpsr_study_number fallback: datasets에 없으면 raw 값 사용
-            if "icpsr_study_number" not in fd_merged.columns:
-                fd_merged["icpsr_study_number"] = fd_merged["icpsr_study_number_raw"]
-            else:
-                fd_merged["icpsr_study_number"] = fd_merged["icpsr_study_number"].fillna(
-                    fd_merged["icpsr_study_number_raw"]
-                )
-
-            # ICPSR Link도 없으면 study number로 만들어주기
-            if "ICPSR Link" not in fd_merged.columns:
-                fd_merged["ICPSR Link"] = ""
-            mask_need_link = fd_merged["ICPSR Link"].isna() | (
-                fd_merged["ICPSR Link"] == ""
-            )
-            mask_have_id = fd_merged["icpsr_study_number"].notna()
-            fd_merged.loc[mask_need_link & mask_have_id, "ICPSR Link"] = (
-                "https://www.icpsr.umich.edu/web/ICPSR/studies/"
-                + fd_merged.loc[mask_need_link & mask_have_id, "icpsr_study_number"].astype(str)
-            )
-
-            # ---- 표 뿌리기 ----
-            preferred_cols_fd = [
-                "journal",
-                "icpsr_study_number",
-                "title",
-                "n_articles",
-                "ICPSR Link",
-            ]
-            show_cols_fd = [c for c in preferred_cols_fd if c in fd_merged.columns]
-            if not show_cols_fd:
-                show_cols_fd = fd_merged.columns.tolist()
-
-            st.dataframe(
-                fd_merged[show_cols_fd],
-                width="stretch",
-                height=260,
-                hide_index=True,
-            )
-
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Research articles in this journal (linked)", int(n_journal_articles))
-            if year_min_field is not None and year_max_field is not None:
-                c2.metric("Earliest article year (journal)", year_min_field)
-                c3.metric("Latest article year (journal)", year_max_field)
-            else:
-                c2.metric("Earliest article year (journal)", "n/a")
-                c3.metric("Latest article year (journal)", "n/a")
-
-            # ---------- per-dataset detail within this journal ----------
-            st.markdown("### Dataset details within this journal")
-
-            ds_ids_journal = (
-                fd_merged["icpsr_study_number"]
-                .dropna()
-                .astype(str)
-                .unique()
-                .tolist()
-            )
-
-            if not ds_ids_journal:
-                st.info("No ICPSR study numbers found for this journal.")
-            else:
-                def _fmt_ds_j(sid_str: str) -> str:
-                    row_j = fd_merged[
-                        fd_merged["icpsr_study_number"].astype(str) == sid_str
-                    ].head(1)
-                    if row_j.empty:
-                        return sid_str
-                    title = str(row_j.iloc[0].get("title", "") or "")
-                    if len(title) > 80:
-                        title = title[:80] + "…"
-                    n_use = int(row_j.iloc[0].get("n_articles", 0))
-                    return f"{sid_str} · {title} (n={n_use})"
-
-                sel_ds_journal = st.selectbox(
-                    "Select a dataset in this journal",
-                    options=ds_ids_journal,
-                    format_func=_fmt_ds_j,
-                    key="sel_ds_journal",
-                )
-
-                # dataset metadata (global, from datasets)
-                ds_meta_global = datasets[
-                    datasets["icpsr_study_number"].astype(str) == sel_ds_journal
-                ].head(1)
-
-                if not ds_meta_global.empty:
-                    ds_row = ds_meta_global.iloc[0]
-                    st.markdown(
-                        f"**ICPSR study number:** {ds_row.get('icpsr_study_number')}"
-                    )
-                    st.markdown(f"**Title (global):** {ds_row.get('title','')}")
-
-
-# --------------------------------------------------
-# 5. Which journals reuse ICPSR datasets most?
-#    (journal-level summary, again only linked research articles)
-# --------------------------------------------------
-
-st.markdown("## 5. Which journals reuse ICPSR datasets most?")
-
-if (
-    articles_research_linked.empty or
-    "journal" not in articles_research_linked.columns or
-    "icpsr_study_number" not in articles_research_linked.columns
-):
-    st.info(
-        "To build a journal-level summary, the linked research-article data "
-        "must contain `journal` and `icpsr_study_number` columns."
-    )
-else:
     jr = articles_research_linked.dropna(subset=["journal"]).copy()
     if jr.empty:
         st.info("No linked research articles with journal information were found.")
@@ -845,6 +708,177 @@ else:
             height=340,
             hide_index=True,
         )
+
+        st.markdown("---")
+
+        # -------------------------------
+        # 4.2 Within a journal, which datasets are used most?
+        # -------------------------------
+        st.markdown("### 4.2 Within a journal, which datasets are used most?")
+
+        usage_fd = articles_research_linked.dropna(
+            subset=["icpsr_study_number", "journal"]
+        ).copy()
+
+        if usage_fd.empty:
+            st.info(
+                "No linked research articles with both journal information and "
+                "`icpsr_study_number` were found."
+            )
+        else:
+            usage_fd["icpsr_study_number_str"] = usage_fd["icpsr_study_number"].astype(str)
+
+            fd_counts = (
+                usage_fd.groupby(["journal", "icpsr_study_number_str"])
+                .size()
+                .reset_index(name="n_articles")
+            )
+
+            journals = sorted(usage_fd["journal"].dropna().astype(str).unique())
+
+            sel_journal = st.selectbox(
+                "Select a journal to explore",
+                options=journals,
+            )
+
+            fd_sel = fd_counts[fd_counts["journal"] == sel_journal].copy()
+
+            if fd_sel.empty:
+                st.info(f"No dataset usage found for journal `{sel_journal}`.")
+            else:
+                journal_rows = usage_fd[usage_fd["journal"] == sel_journal].copy()
+                n_journal_articles = len(journal_rows)
+
+                year_min_field = None
+                year_max_field = None
+                if "year" in journal_rows.columns:
+                    years_num = pd.to_numeric(journal_rows["year"], errors="coerce")
+                    if years_num.notna().any():
+                        year_min_field = int(years_num.min())
+                        year_max_field = int(years_num.max())
+
+                top_n_field = st.slider(
+                    "Top datasets for this journal",
+                    5,
+                    50,
+                    15,
+                    step=5,
+                    key="top_n_journal_slider",
+                )
+
+                # 상위 N개만 사용
+                fd_sel = fd_sel.sort_values("n_articles", ascending=False).head(top_n_field)
+
+                # --- 여기서부터: dataset 메타와 merge + fallback ---
+                fd_sel["icpsr_study_number_raw"] = fd_sel["icpsr_study_number_str"]
+
+                dsets_tmp = datasets.copy()
+                if not dsets_tmp.empty and "icpsr_study_number" in dsets_tmp.columns:
+                    dsets_tmp["icpsr_study_number_str"] = dsets_tmp[
+                        "icpsr_study_number"
+                    ].astype(str)
+                else:
+                    dsets_tmp = pd.DataFrame(columns=["icpsr_study_number_str"])
+
+                fd_merged = fd_sel.merge(
+                    dsets_tmp,
+                    on="icpsr_study_number_str",
+                    how="left",
+                    suffixes=("", "_ds"),
+                )
+
+                # icpsr_study_number fallback: datasets에 없으면 raw 값 사용
+                if "icpsr_study_number" not in fd_merged.columns:
+                    fd_merged["icpsr_study_number"] = fd_merged["icpsr_study_number_raw"]
+                else:
+                    fd_merged["icpsr_study_number"] = fd_merged["icpsr_study_number"].fillna(
+                        fd_merged["icpsr_study_number_raw"]
+                    )
+
+                # ICPSR Link도 없으면 study number로 만들어주기
+                if "ICPSR Link" not in fd_merged.columns:
+                    fd_merged["ICPSR Link"] = ""
+                mask_need_link = fd_merged["ICPSR Link"].isna() | (
+                    fd_merged["ICPSR Link"] == ""
+                )
+                mask_have_id = fd_merged["icpsr_study_number"].notna()
+                fd_merged.loc[mask_need_link & mask_have_id, "ICPSR Link"] = (
+                    "https://www.icpsr.umich.edu/web/ICPSR/studies/"
+                    + fd_merged.loc[mask_need_link & mask_have_id, "icpsr_study_number"].astype(str)
+                )
+
+                # ---- 표 뿌리기 ----
+                preferred_cols_fd = [
+                    "journal",
+                    "icpsr_study_number",
+                    "title",
+                    "n_articles",
+                    "ICPSR Link",
+                ]
+                show_cols_fd = [c for c in preferred_cols_fd if c in fd_merged.columns]
+                if not show_cols_fd:
+                    show_cols_fd = fd_merged.columns.tolist()
+
+                st.dataframe(
+                    fd_merged[show_cols_fd],
+                    width="stretch",
+                    height=260,
+                    hide_index=True,
+                )
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Research articles in this journal (linked)", int(n_journal_articles))
+                if year_min_field is not None and year_max_field is not None:
+                    c2.metric("Earliest article year (journal)", year_min_field)
+                    c3.metric("Latest article year (journal)", year_max_field)
+                else:
+                    c2.metric("Earliest article year (journal)", "n/a")
+                    c3.metric("Latest article year (journal)", "n/a")
+
+                # ---------- per-dataset detail within this journal ----------
+                st.markdown("### Dataset details within this journal")
+
+                ds_ids_journal = (
+                    fd_merged["icpsr_study_number"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                )
+
+                if not ds_ids_journal:
+                    st.info("No ICPSR study numbers found for this journal.")
+                else:
+                    def _fmt_ds_j(sid_str: str) -> str:
+                        row_j = fd_merged[
+                            fd_merged["icpsr_study_number"].astype(str) == sid_str
+                        ].head(1)
+                        if row_j.empty:
+                            return sid_str
+                        title = str(row_j.iloc[0].get("title", "") or "")
+                        if len(title) > 80:
+                            title = title[:80] + "…"
+                        n_use = int(row_j.iloc[0].get("n_articles", 0))
+                        return f"{sid_str} · {title} (n={n_use})"
+
+                    sel_ds_journal = st.selectbox(
+                        "Select a dataset in this journal",
+                        options=ds_ids_journal,
+                        format_func=_fmt_ds_j,
+                        key="sel_ds_journal",
+                    )
+
+                    # dataset metadata (global, from datasets)
+                    ds_meta_global = datasets[
+                        datasets["icpsr_study_number"].astype(str) == sel_ds_journal
+                    ].head(1)
+
+                    if not ds_meta_global.empty:
+                        ds_row = ds_meta_global.iloc[0]
+                        st.markdown(
+                            f"**ICPSR study number:** {ds_row.get('icpsr_study_number')}"
+                        )
+                        st.markdown(f"**Title (global):** {ds_row.get('title','')}")
 
 st.markdown("---")
 st.caption(
