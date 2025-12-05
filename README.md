@@ -83,7 +83,7 @@ Designed for bibliometrics researchers, data scientists, and science-of-science 
                  (6) Interactive Dashboard
                  --------------------------
                  • Streamlit (app/streamlit_app.py)
-                 • Article Explorer / Dataset Rankings / Journal Lens
+                 • Overview/ Article Browser / Dataset Rankings / Journal-level Analysis
 
 ```
 ---
