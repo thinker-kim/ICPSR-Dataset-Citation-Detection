@@ -90,13 +90,14 @@ Designed for bibliometrics researchers, data scientists, and science-of-science 
 
 ### 1.1 — Article Retrieval & Metadata Enrichment
 
-The pipeline queries **OpenAlex API** to retrieve research articles with essential metadata:
+The pipeline queries the OpenAlex API to retrieve research articles with essential metadata.  
+See the official documentation for details:  
+[OpenAlex API](https://docs.openalex.org/how-to-use-the-api/api-overview).
 
 | Field | Description |
 |-------|-------------|
 | `title` | Article headline |
 | `doi` | Digital object identifier |
-| `authors` | Author information |
 | `publication_year` | Year of publication |
 | `host_venue` | Journal or conference venue |
 | `referenced_works` | OpenAlex IDs of cited works |
