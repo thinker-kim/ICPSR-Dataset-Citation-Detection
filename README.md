@@ -7,7 +7,6 @@
 This system automates the discovery and analysis of ICPSR dataset citations through:
 
 - **Explicit & implicit citation detection** across research literature
-- **Actual dataset-to-article mapping** via OpenAlex metadata
 - **Full-text analysis** for contextual ICPSR mentions  
 - **Reference-based linking** to study numbers and DOIs
 - **Interactive Streamlit dashboard** for exploration and discovery
