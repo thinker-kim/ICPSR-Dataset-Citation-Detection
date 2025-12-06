@@ -244,7 +244,7 @@ Focuses on verified research articles (`label = 'research_article_using_icpsr'`)
 Full-text search and filtering interface.
 
 **Filter dimensions:**
-- Free-text query (title, DOI, author, journal)
+- Free-text query (title, ICPSR studny nuber, journal)
 - Work type (research vs. documentation)
 - Year range slider
 - Explicit dataset link presence
