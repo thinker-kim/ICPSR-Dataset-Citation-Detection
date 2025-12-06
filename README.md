@@ -278,16 +278,6 @@ Dataset reuse breakdown by journal.
 
 ---
 
-#### **Module E: Journal Rankings**
-Top journals by ICPSR engagement.
-
-**Ranking dimensions:**
-- of ICPSR-citing research articles
-- of unique datasets reused
-- Activity timespan
-
----
-
 ## 3. Artifacts & Data Files
 
 | File | Purpose | GitHub | Notes |
